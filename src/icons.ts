@@ -62,7 +62,7 @@ export function icon(name: IconName, size = 20): string {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[name]}</svg>`;
 }
 
-/** Marca da Discórdia (gradiente + ondas de sinal). */
+/** Marca da Discórdia (gradiente + ondas de sinal, espelhadas em forma de "D"). */
 export function logoMark(size = 44): string {
-  return `<svg viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true"><defs><linearGradient id="dlg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6c7bff"/><stop offset="1" stop-color="#a855f7"/></linearGradient></defs><rect x="4" y="4" width="56" height="56" rx="16" fill="url(#dlg)"/><path d="M20 42a14 14 0 0 1 0-20" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/><path d="M28 38a6 6 0 0 1 0-12" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/><circle cx="33" cy="32" r="3.5" fill="#fff"/></svg>`;
+  return `<svg viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true"><defs><linearGradient id="dlg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6c7bff"/><stop offset="1" stop-color="#a855f7"/></linearGradient></defs><rect x="4" y="4" width="56" height="56" rx="16" fill="url(#dlg)"/><g transform="translate(64 0) scale(-1 1)"><path d="M20 42a14 14 0 0 1 0-20" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/><path d="M28 38a6 6 0 0 1 0-12" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/><circle cx="33" cy="32" r="3.5" fill="#fff"/></g></svg>`;
 }
