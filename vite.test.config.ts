@@ -9,7 +9,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist/testes',
-    emptyOutDir: false,
+    emptyOutDir: true,
     sourcemap: true,
   },
 });

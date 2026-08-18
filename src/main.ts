@@ -4,6 +4,9 @@ import './style.css';
 import { renderLanding } from './view/landing';
 import { renderUser } from './view/user';
 import { renderRoom } from './view/room';
+import { initTheme } from './lib/theme';
+
+initTheme();
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app não encontrado');

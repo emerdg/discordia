@@ -14,7 +14,8 @@ import {
 } from '../lib/storage';
 import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
-import type { ChatHistoryLimit, ChatSide } from '../types';
+import { setTheme } from '../lib/theme';
+import type { ChatHistoryLimit, ChatSide, Theme } from '../types';
 
 export function renderUser(container: HTMLElement): void {
   let prefs = getPrefs();
@@ -33,7 +34,6 @@ export function renderUser(container: HTMLElement): void {
             <span class="chip-avatar"><span class="chip-emoji">${prefs.emoji}</span></span>
             <span class="chip-name">${escapeHtml(prefs.name)}</span>
           </div>
-          <button id="btn-settings" class="btn-ghost">${icon('settings', 16)} <span>Configurações</span></button>
         </header>
 
         <div class="user-cols">
@@ -68,38 +68,53 @@ export function renderUser(container: HTMLElement): void {
           <p id="history-empty" class="hint">Nenhuma sala ainda. Crie uma ou entre por ID.</p>
         </section>
 
-        <div id="settings-panel" class="card settings-panel hidden">
-          <h2 class="sec-title"><span class="sec-ic">${icon('settings', 16)}</span> Suas configurações</h2>
-          <div class="settings-grid">
-            <div class="setting">
-              <span class="setting-label">Lado do chat na sala</span>
-              <div class="seg" id="chat-side-seg">
-                <button data-side="left" class="seg-btn">Esquerda</button>
-                <button data-side="right" class="seg-btn">Direita</button>
+        <section class="card menu">
+          <button id="btn-settings" class="menu-btn" type="button" aria-expanded="false">
+            <span class="menu-ic">${icon('settings', 18)}</span>
+            <span class="menu-label">Configurações</span>
+            <span class="chev" aria-hidden="true"></span>
+          </button>
+          <div id="settings-wrap" class="settings-wrap">
+            <div id="settings-panel" class="settings-panel">
+              <div class="settings-grid">
+                <div class="setting">
+                  <span class="setting-label">Tema</span>
+                  <div class="seg" id="theme-seg">
+                    <button data-theme="dark" class="seg-btn">${icon('moon', 15)} Escuro</button>
+                    <button data-theme="light" class="seg-btn">${icon('sun', 15)} Claro</button>
+                  </div>
+                </div>
+                <div class="setting">
+                  <span class="setting-label">Lado do chat na sala</span>
+                  <div class="seg" id="chat-side-seg">
+                    <button data-side="left" class="seg-btn">Esquerda</button>
+                    <button data-side="right" class="seg-btn">Direita</button>
+                  </div>
+                </div>
+                <div class="setting">
+                  <span class="setting-label">Guardar histórico do chat</span>
+                  <select id="history-limit">
+                    <option value="0">Não salvar</option>
+                    <option value="25">25 mensagens</option>
+                    <option value="50">50 mensagens</option>
+                    <option value="100">100 mensagens</option>
+                  </select>
+                </div>
+                <div class="setting">
+                  <span class="setting-label">Cor do seu nome</span>
+                  <div class="colors" id="color-picker"></div>
+                  <label class="custom-color">
+                    Personalizar <input type="color" id="color-custom" value="${prefs.color}" />
+                  </label>
+                </div>
+                <div class="setting setting-emoji">
+                  <span class="setting-label">Seu emoji</span>
+                  <div class="emoji-wrap"><div class="emoji-grid" id="emoji-grid"></div></div>
+                </div>
               </div>
             </div>
-            <div class="setting">
-              <span class="setting-label">Guardar histórico do chat</span>
-              <select id="history-limit">
-                <option value="0">Não salvar</option>
-                <option value="25">25 mensagens</option>
-                <option value="50">50 mensagens</option>
-                <option value="100">100 mensagens</option>
-              </select>
-            </div>
-            <div class="setting">
-              <span class="setting-label">Cor do seu nome</span>
-              <div class="colors" id="color-picker"></div>
-              <label class="custom-color">
-                Personalizar <input type="color" id="color-custom" value="${prefs.color}" />
-              </label>
-            </div>
-            <div class="setting setting-emoji">
-              <span class="setting-label">Seu emoji</span>
-              <div class="emoji-wrap"><div class="emoji-grid" id="emoji-grid"></div></div>
-            </div>
           </div>
-        </div>
+        </section>
       </div>
     `;
 
@@ -193,10 +208,31 @@ export function renderUser(container: HTMLElement): void {
 
     // configurações
     const settingsBtn = container.querySelector('#btn-settings');
-    const panel = container.querySelector('#settings-panel');
+    const wrap = container.querySelector('#settings-wrap');
     settingsBtn?.addEventListener('click', () => {
-      panel?.classList.toggle('hidden');
+      const open = wrap?.classList.toggle('open') ?? false;
+      settingsBtn.setAttribute('aria-expanded', String(open));
     });
+
+    // tema
+    const themeSeg = container.querySelector('#theme-seg');
+    if (themeSeg) {
+      const markTheme = (t: Theme): void => {
+        themeSeg.querySelectorAll('.seg-btn').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-theme') === t);
+        });
+      };
+      markTheme(prefs.theme);
+      themeSeg.querySelectorAll('.seg-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          const t = (b.getAttribute('data-theme') as Theme) || 'dark';
+          setTheme(t);
+          prefs = getPrefs();
+          markTheme(t);
+          toast(t === 'dark' ? 'Tema escuro' : 'Tema claro');
+        });
+      });
+    }
 
     // lado do chat
     const seg = container.querySelector('#chat-side-seg');

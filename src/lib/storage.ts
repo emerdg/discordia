@@ -179,6 +179,7 @@ const DEFAULT_PREFS: UserPrefs = {
   resolution: '720p',
   mic: false,
   pcAudio: false,
+  theme: 'dark',
 };
 
 export function getPrefs(): UserPrefs {
