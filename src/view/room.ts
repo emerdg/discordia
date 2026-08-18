@@ -427,12 +427,10 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   const copyId = (): void => {
     const text = roomId.toUpperCase();
-    const url = `${location.origin}${location.pathname}#/room/${roomId}`;
     void navigator.clipboard
       .writeText(text)
       .then(() => toast(`ID copiado: ${text}`))
       .catch(() => toast(`Copie: ${text}`));
-    void navigator.clipboard.writeText(url).catch(() => undefined);
   };
 
   ui.root.querySelector('#btn-copy-id')?.addEventListener('click', copyId);

@@ -5,6 +5,7 @@ import {
   EMOJIS,
   PRESET_COLORS,
   addRoom,
+  clearRooms,
   getPrefs,
   getRoomHistory,
   getRooms,
@@ -179,6 +180,11 @@ export function renderUser(container: HTMLElement): void {
     };
 
     // histórico
+    container.querySelector('#btn-clear-history')?.addEventListener('click', () => {
+      clearRooms();
+      renderHistory();
+      toast('Histórico de salas limpo.');
+    });
     renderHistory();
 
     // configurações

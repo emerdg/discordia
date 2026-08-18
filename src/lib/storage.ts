@@ -83,6 +83,10 @@ export function removeRoom(id: string): void {
   write('rooms', getRooms().filter((r) => r.id !== id));
 }
 
+export function clearRooms(): void {
+  write('rooms', []);
+}
+
 export function getRoomHistory(id: string): RecentRoom | undefined {
   return getRooms().find((r) => r.id === id);
 }
