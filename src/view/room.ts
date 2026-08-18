@@ -160,7 +160,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   const showStage = (kind: 'none' | 'video'): void => {
     ui.placeholder.classList.toggle('hidden', kind === 'video');
-    ui.mainVideo.classList.toggle('hidden', kind !== 'video');
+    ui.mainVideo.hidden = kind !== 'video';
     if (kind === 'video') {
       void ui.mainVideo.play().catch(() => undefined);
     }
@@ -286,7 +286,21 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     ui.txStart.textContent = 'Parar transmissão';
     ui.selfPreview.hidden = false;
     ui.selfVideo.srcObject = localStream;
-    ui.selfVideo.pause();
+    void ui.selfVideo.play().then(() => {
+      const pauseAfterFrame = (): void => {
+        try {
+          ui.selfVideo.pause();
+        } catch {
+          /* noop */
+        }
+      };
+      const video = ui.selfVideo as unknown as { requestVideoFrameCallback?: (cb: () => void) => void };
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        video.requestVideoFrameCallback(pauseAfterFrame);
+      } else {
+        setTimeout(pauseAfterFrame, 350);
+      }
+    });
     ui.selfPreview.classList.add('on');
     setStatus('Transmitindo. Clique em você ou em outros para ver.');
     renderRoster(members);
