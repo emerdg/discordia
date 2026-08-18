@@ -4,15 +4,19 @@ import { getDb } from './firebase';
 /**
  * Sinalização WebRTC via Realtime Database (nuvem do Firebase).
  *
- * Estrutura por par (from → to):
- *   rooms/:roomId/signal/:from/:to/{offer,answer,ice/}
+ * Estrutura por par (from → to) e tipo de conexão (data | media):
+ *   rooms/:roomId/signal/:from/:to/:kind/{offer,answer,ice/}
  *
  * Cada lado escreve no nó "para mim" e observa o nó "para o outro".
+ * O sufixo :kind mantém o data channel e a mídia em trilhos separados
+ * (um offer de data nunca aciona o watcher de mídia e vice-versa).
  * Todos os dados são descartáveis (apenas permitem a conexão P2P).
  */
 
-const node = (roomId: string, from: string, to: string) =>
-  `rooms/${roomId}/signal/${from}/${to}`;
+export type SignalKind = 'data' | 'media';
+
+const node = (roomId: string, from: string, to: string, kind: SignalKind) =>
+  `rooms/${roomId}/signal/${from}/${to}/${kind}`;
 
 export type SignalDescription = RTCSessionDescriptionInit;
 
@@ -21,8 +25,9 @@ export async function sendOffer(
   from: string,
   to: string,
   offer: SignalDescription,
+  kind: SignalKind,
 ): Promise<void> {
-  await set(ref(getDb(), `${node(roomId, from, to)}/offer`), {
+  await set(ref(getDb(), `${node(roomId, from, to, kind)}/offer`), {
     type: offer.type,
     sdp: offer.sdp,
   });
@@ -32,9 +37,10 @@ export function watchOffer(
   roomId: string,
   from: string,
   to: string,
+  kind: SignalKind,
   cb: (offer: SignalDescription) => void,
 ): () => void {
-  const r = ref(getDb(), `${node(roomId, from, to)}/offer`);
+  const r = ref(getDb(), `${node(roomId, from, to, kind)}/offer`);
   const handler = onValue(r, (snap) => {
     if (snap.exists()) cb(snap.val() as SignalDescription);
   });
@@ -46,8 +52,9 @@ export async function sendAnswer(
   from: string,
   to: string,
   answer: SignalDescription,
+  kind: SignalKind,
 ): Promise<void> {
-  await set(ref(getDb(), `${node(roomId, from, to)}/answer`), {
+  await set(ref(getDb(), `${node(roomId, from, to, kind)}/answer`), {
     type: answer.type,
     sdp: answer.sdp,
   });
@@ -57,9 +64,10 @@ export function watchAnswer(
   roomId: string,
   from: string,
   to: string,
+  kind: SignalKind,
   cb: (answer: SignalDescription) => void,
 ): () => void {
-  const r = ref(getDb(), `${node(roomId, from, to)}/answer`);
+  const r = ref(getDb(), `${node(roomId, from, to, kind)}/answer`);
   const handler = onValue(r, (snap) => {
     if (snap.exists()) cb(snap.val() as SignalDescription);
   });
@@ -70,18 +78,20 @@ export async function sendIce(
   roomId: string,
   from: string,
   to: string,
+  kind: SignalKind,
   candidate: RTCIceCandidateInit,
 ): Promise<void> {
-  await push(ref(getDb(), `${node(roomId, from, to)}/ice`), candidate);
+  await push(ref(getDb(), `${node(roomId, from, to, kind)}/ice`), candidate);
 }
 
 export function watchIce(
   roomId: string,
   from: string,
   to: string,
+  kind: SignalKind,
   cb: (candidate: RTCIceCandidateInit) => void,
 ): () => void {
-  const r = ref(getDb(), `${node(roomId, from, to)}/ice`);
+  const r = ref(getDb(), `${node(roomId, from, to, kind)}/ice`);
   const handler = onChildAdded(r, (snap) => {
     const val = snap.val() as RTCIceCandidateInit;
     if (val) cb(val);
@@ -92,8 +102,8 @@ export function watchIce(
 /** Remove toda a sinalização entre dois pares (ao fechar a conexão). */
 export async function clearSignal(roomId: string, a: string, b: string): Promise<void> {
   try {
-    await remove(ref(getDb(), node(roomId, a, b)));
-    if (a !== b) await remove(ref(getDb(), node(roomId, b, a)));
+    await remove(ref(getDb(), `rooms/${roomId}/signal/${a}/${b}`));
+    if (a !== b) await remove(ref(getDb(), `rooms/${roomId}/signal/${b}/${a}`));
   } catch {
     /* noop */
   }

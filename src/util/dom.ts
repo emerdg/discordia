@@ -19,6 +19,16 @@ export function input$(container: ParentNode, id: string): HTMLInputElement {
 
 let toastTimer: number | null = null;
 
+/** Resolve o mais cedo que der; se `ms` passar, usa `fallback` (evita travamentos). */
+export function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((resolve) => {
+      setTimeout(() => resolve(fallback), ms);
+    }),
+  ]);
+}
+
 /** Notificação curta no canto da tela. */
 export function toast(message: string): void {
   const existing = document.getElementById('toast');

@@ -9,7 +9,14 @@ const node = {
   member: (roomId: string, peerId: string) => `rooms/${roomId}/members/${peerId}`,
 };
 
-// ------------------------------------------------------------------ meta
+/** Observa o estado da conexão com o Realtime Database (hub). */
+export function watchHubConnection(cb: (online: boolean) => void): () => void {
+  const r = ref(getDb(), '.info/connected');
+  const off = onValue(r, (snap) => cb(Boolean(snap.val())));
+  return () => off();
+}
+
+// ----------------------------------------------------------------- meta
 
 export async function readRoomMeta(roomId: string): Promise<RoomMeta | null> {
   try {

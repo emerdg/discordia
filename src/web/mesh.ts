@@ -1,6 +1,7 @@
 import { watchAnswer, watchIce, watchOffer, sendOffer, sendAnswer, sendIce, clearSignal } from '../lib/signaling';
 import { joinPresence, leavePresence, setSharing, watchMembers } from '../lib/presence';
 import { decodeWire, encodeWire, type Wire } from '../lib/protocol';
+import { withTimeout } from '../util/dom';
 import { encodingsFor, iceConfig, preferredVideoCodecs } from './media';
 import type { ChatMessage, MemberInfo, Resolution } from '../types';
 
@@ -134,8 +135,11 @@ export class Mesh {
 
   async join(): Promise<void> {
     this.stopped = false;
-    await joinPresence(this.roomId, { ...this.me, peerId: this.myId });
-
+    try {
+      await withTimeout(joinPresence(this.roomId, { ...this.me, peerId: this.myId }), 6000, undefined);
+    } catch (err) {
+      console.error('[mesh] falha ao registrar presença:', err);
+    }
     const off = watchMembers(this.roomId, (list) => {
       const next = new Map(list.map((m) => [m.peerId, m]));
       this.members = next;
@@ -190,7 +194,7 @@ export class Mesh {
 
     const iceBuf = newIceBuffer();
     link.cleanups.push(
-      watchAnswer(this.roomId, peerId, me, async (ans) => {
+      watchAnswer(this.roomId, peerId, me, 'data', async (ans) => {
         if (pc.signalingState !== 'stable') {
           try {
             await pc.setRemoteDescription(ans);
@@ -200,17 +204,17 @@ export class Mesh {
           }
         }
       }),
-      watchIce(this.roomId, peerId, me, (c) => addIceBuffered(pc, c, iceBuf)),
+      watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     );
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) void sendIce(this.roomId, me, peerId, candidateInit(e.candidate));
+      if (e.candidate) void sendIce(this.roomId, me, peerId, 'data', candidateInit(e.candidate));
     };
     this.wirePcEvents(pc, () => this.handleLinkClosed(link));
     void (async () => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await sendOffer(this.roomId, me, peerId, offer);
+      await sendOffer(this.roomId, me, peerId, offer, 'data');
     })().catch(() => this.handleLinkClosed(link));
   }
 
@@ -227,7 +231,7 @@ export class Mesh {
     this.links.set(peerId, link);
 
     link.cleanups.push(
-      watchOffer(this.roomId, peerId, me, async (offer) => {
+      watchOffer(this.roomId, peerId, me, 'data', async (offer) => {
         if (!this.links.has(peerId) || this.stopped || link.dataPc) return;
         const pc = new RTCPeerConnection(iceConfig());
         link.dataPc = pc;
@@ -237,10 +241,10 @@ export class Mesh {
           this.wireDataChannel(link);
         };
         link.cleanups.push(
-          watchIce(this.roomId, peerId, me, (c) => addIceBuffered(pc, c, iceBuf)),
+watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
         );
         pc.onicecandidate = (e) => {
-          if (e.candidate) void sendIce(this.roomId, me, peerId, candidateInit(e.candidate));
+          if (e.candidate) void sendIce(this.roomId, me, peerId, 'data', candidateInit(e.candidate));
         };
         this.wirePcEvents(pc, () => this.handleLinkClosed(link));
         try {
@@ -248,7 +252,7 @@ export class Mesh {
           await flushIce(pc, iceBuf);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          await sendAnswer(this.roomId, me, peerId, answer);
+          await sendAnswer(this.roomId, me, peerId, answer, 'data');
         } catch {
           this.handleLinkClosed(link);
         }
@@ -427,7 +431,7 @@ export class Mesh {
       if (stream) this.events.onReceiveStream(peerId, stream);
     };
     pc.onicecandidate = (e) => {
-      if (e.candidate) void sendIce(this.roomId, this.myId, peerId, candidateInit(e.candidate));
+      if (e.candidate) void sendIce(this.roomId, this.myId, peerId, 'media', candidateInit(e.candidate));
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.teardownWatch(peerId);
@@ -437,7 +441,7 @@ export class Mesh {
     };
 
     const iceBuf = newIceBuffer();
-    const unsubAnswer = watchAnswer(this.roomId, peerId, this.myId, async (ans) => {
+    const unsubAnswer = watchAnswer(this.roomId, peerId, this.myId, 'media', async (ans) => {
       if (pc.signalingState !== 'stable') {
         try {
           await pc.setRemoteDescription(ans);
@@ -447,12 +451,12 @@ export class Mesh {
         }
       }
     });
-    const unsubIce = watchIce(this.roomId, peerId, this.myId, (c) => addIceBuffered(pc, c, iceBuf));
+    const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (c) => addIceBuffered(pc, c, iceBuf));
 
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await sendOffer(this.roomId, this.myId, peerId, offer);
+      await sendOffer(this.roomId, this.myId, peerId, offer, 'media');
       console.debug(`[mesh] assistindo ${peerId} — offer enviado`);
     } catch {
       unsubAnswer();
@@ -501,7 +505,7 @@ export class Mesh {
   /** Observa offers de mídia vindos de um par que quer me assistir. */
   watchIncomingMedia(peerId: string): void {
     const me = this.myId;
-    const off = watchOffer(this.roomId, peerId, me, async (offer) => {
+    const off = watchOffer(this.roomId, peerId, me, 'media', async (offer) => {
       if (this.stopped || this.mediaIn.has(peerId)) return;
       await this.answerMediaOffer(peerId, offer);
     });
@@ -520,10 +524,10 @@ export class Mesh {
     }
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) void sendIce(this.roomId, this.myId, peerId, candidateInit(e.candidate));
+      if (e.candidate) void sendIce(this.roomId, this.myId, peerId, 'media', candidateInit(e.candidate));
     };
     const iceBuf = newIceBuffer();
-    const unsubIce = watchIce(this.roomId, peerId, this.myId, (c) => addIceBuffered(pc, c, iceBuf));
+    const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (c) => addIceBuffered(pc, c, iceBuf));
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
@@ -566,7 +570,7 @@ export class Mesh {
       }
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await sendAnswer(this.roomId, this.myId, peerId, answer);
+      await sendAnswer(this.roomId, this.myId, peerId, answer, 'media');
       this.events.onRemoteWatch(peerId, true);
     } catch {
       try {

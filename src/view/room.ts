@@ -1,11 +1,11 @@
 import { firebaseReady } from '../lib/firebase';
 import { isValidRoomId } from '../lib/config';
-import { countMembers, readRoomMeta, watchRoomMeta } from '../lib/presence';
+import { countMembers, readRoomMeta, watchHubConnection, watchRoomMeta } from '../lib/presence';
 import { addRoom, getPrefs, getRoomHistory, patchPrefs } from '../lib/storage';
 import { appendMessages, loadBefore, loadRecent, nextSeq } from '../lib/idb';
 import { Mesh } from '../web/mesh';
 import { startCapture, stopStream } from '../web/media';
-import { escapeHtml, toast } from '../util/dom';
+import { escapeHtml, toast, withTimeout } from '../util/dom';
 import type { ChatMessage, MemberInfo, UserPrefs } from '../types';
 
 type WatchTarget = { kind: 'none' } | { kind: 'self' } | { kind: 'peer'; peerId: string };
@@ -54,6 +54,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   let hideTimer: number | null = null;
   let members: MemberInfo[] = [];
   let offMeta: (() => void) | null = null;
+  let offHub: (() => void) | null = null;
+  let hubOnline = true;
 
   // ------------------------------------------------------------------ layout
 
@@ -474,6 +476,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
         .map((m) => (m.peerId === s.peerId ? `${m.emoji}${m.name} (eu)` : `${m.emoji}${m.name}${m.sharing ? ' 🔴' : ''}`))
         .join(', ') || '(nenhum)';
     dbgEl.textContent = [
+      `Hub: ${hubOnline ? 'online ✅' : 'offline ⛔'}`,
       `Sala: ${roomId}   |   Seu peer: ${s.peerId}`,
       `Participantes no banco: ${s.members} → ${names}`,
       `Canais de dados abertos: ${s.links}/${s.linksTotal}`,
@@ -532,6 +535,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     if (dbgTimer != null) clearInterval(dbgTimer);
     await stopTx();
     offMeta?.();
+    offHub?.();
     await mesh.destroy();
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('mousemove', poke);
@@ -542,7 +546,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   const doJoin = async (): Promise<void> => {
     try {
       const hist = getRoomHistory(roomId);
-      const meta = await readRoomMeta(roomId);
+      const meta = await withTimeout(readRoomMeta(roomId), 5000, null);
       if (meta) {
         mesh.setRoomInfo(meta.name, meta.maxUsers);
         updateRoomName(meta.name);
@@ -551,7 +555,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
         updateRoomName(hist.name);
       }
 
-      if (meta && (await countMembers(roomId)) >= meta.maxUsers) {
+      const count = await withTimeout(countMembers(roomId), 4000, 0);
+      if (meta && count >= meta.maxUsers) {
         toast(`Sala cheia (máximo ${meta.maxUsers}).`);
         location.hash = '#/user';
         return;
@@ -559,6 +564,15 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
       offMeta = watchRoomMeta(roomId, (m) => {
         if (m) updateRoomName(m.name);
+      });
+      offHub = watchHubConnection((online) => {
+        hubOnline = online;
+        if (!online) {
+          setStatus('⚠️ Hub offline — tentando reconectar…');
+          toast('Conexão com o hub caiu.');
+        } else {
+          setStatus('Conectado ao hub. Clique em um participante para assistir ou transmita sua tela.');
+        }
       });
 
       await mesh.join();
@@ -571,17 +585,18 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
   };
 
+  void doJoin();
+
   return async () => {
     if (!cleanupDone) {
       cleanupDone = true;
       if (dbgTimer != null) clearInterval(dbgTimer);
       await stopTx();
       offMeta?.();
+      offHub?.();
       await mesh.destroy();
       document.removeEventListener('fullscreenchange', onFsChange);
       document.removeEventListener('mousemove', poke);
     }
   };
-
-  void doJoin();
-}  
+}
