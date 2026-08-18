@@ -12,6 +12,7 @@ import {
   patchPrefs,
   removeRoom,
 } from '../lib/storage';
+import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
 import type { ChatHistoryLimit, ChatSide } from '../types';
 
@@ -26,33 +27,33 @@ export function renderUser(container: HTMLElement): void {
     prefs = getPrefs();
     container.innerHTML = `
       <div class="user-page">
-        <header class="user-top">
-          <a href="#/" class="back">←</a>
+        <header class="topbar">
+          <a href="#/" class="back-btn icon-btn" title="Voltar">${icon('back', 18)}</a>
           <div class="user-chip" id="user-chip" style="--chip-color:${prefs.color}">
-            <span class="chip-emoji">${prefs.emoji}</span>
+            <span class="chip-avatar"><span class="chip-emoji">${prefs.emoji}</span></span>
             <span class="chip-name">${escapeHtml(prefs.name)}</span>
           </div>
-          <button id="btn-settings" class="ghost">⚙️ Configurações</button>
+          <button id="btn-settings" class="btn-ghost">${icon('settings', 16)} <span>Configurações</span></button>
         </header>
 
         <div class="user-cols">
           <section class="card create-card">
-            <h2>📢 Criar uma sala</h2>
-            <label for="room-name">Nome da sala</label>
+            <h2 class="sec-title"><span class="sec-ic">${icon('broadcast', 18)}</span> Criar uma sala</h2>
+            <label class="field-label" for="room-name">Nome da sala</label>
             <input id="room-name" type="text" placeholder="Ex.: Jogatina de sexta" maxlength="40" autocomplete="off" />
-            <label for="room-max">Limite de participantes (${prefs.emoji})</label>
+            <label class="field-label" for="room-max">Limite de participantes</label>
             <select id="room-max"></select>
             <p id="max-warning" class="warn hidden">Mais de 5 pessoas em malha P2P podem exigir uma banda de internet muito maior.</p>
-            <button id="btn-create" class="primary">Criar sala</button>
+            <button id="btn-create" class="btn-primary">${icon('plus', 16)} Criar sala</button>
             <p class="hint">O ID é gerado automaticamente. Você o compartilha com os amigos.</p>
           </section>
 
           <section class="card join-card">
-            <h2>🚪 Entrar numa sala</h2>
-            <label for="join-id">ID da sala</label>
+            <h2 class="sec-title"><span class="sec-ic">${icon('users', 18)}</span> Entrar numa sala</h2>
+            <label class="field-label" for="join-id">ID da sala</label>
             <div class="join-row">
               <input id="join-id" type="text" placeholder="Ex.: K7QWX2D" autocomplete="off" maxlength="16" />
-              <button id="btn-join" class="primary">Entrar</button>
+              <button id="btn-join" class="btn-primary">Entrar</button>
             </div>
             <p class="hint">Se já entrou antes, o nome da sala é lembrado no seu navegador.</p>
           </section>
@@ -60,15 +61,15 @@ export function renderUser(container: HTMLElement): void {
 
         <section class="card history-card">
           <div class="history-head">
-            <h2>🕘 Salas recentes</h2>
-            <button id="btn-clear-history" class="ghost hidden">Limpar histórico</button>
+            <h2 class="sec-title"><span class="sec-ic">${icon('clock', 16)}</span> Salas recentes</h2>
+            <button id="btn-clear-history" class="btn-ghost hidden">${icon('trash', 15)} Limpar</button>
           </div>
           <ul id="history-list" class="history-list"></ul>
           <p id="history-empty" class="hint">Nenhuma sala ainda. Crie uma ou entre por ID.</p>
         </section>
 
         <div id="settings-panel" class="card settings-panel hidden">
-          <h2>⚙️ Suas configurações</h2>
+          <h2 class="sec-title"><span class="sec-ic">${icon('settings', 16)}</span> Suas configurações</h2>
           <div class="settings-grid">
             <div class="setting">
               <span class="setting-label">Lado do chat na sala</span>
@@ -95,7 +96,7 @@ export function renderUser(container: HTMLElement): void {
             </div>
             <div class="setting setting-emoji">
               <span class="setting-label">Seu emoji</span>
-              <div class="emoji-grid" id="emoji-grid"></div>
+              <div class="emoji-wrap"><div class="emoji-grid" id="emoji-grid"></div></div>
             </div>
           </div>
         </div>
@@ -160,7 +161,7 @@ export function renderUser(container: HTMLElement): void {
     const joinRoom = (raw: string): void => {
       // Aceita "K7QWX2D", "k7qwx2d" ou URLs/links com #/room/K7QWX2D
       const linkMatch = raw.match(/room\/[A-Za-z0-9]{4,16}/i);
-      const rawId = linkMatch ? linkMatch[0].split('/').pop() as string : raw;
+      const rawId = linkMatch ? (linkMatch[0].split('/').pop() as string) : raw;
       const id = normalizeRoomId(rawId);
       if (!isValidRoomId(id)) {
         toast('ID inválido. Use o ID exibido na sala.');
@@ -319,7 +320,7 @@ export function renderUser(container: HTMLElement): void {
       del.type = 'button';
       del.className = 'history-del';
       del.title = 'Remover do histórico';
-      del.textContent = '✕';
+      del.innerHTML = icon('trash', 16);
       del.addEventListener('click', (e) => {
         e.stopPropagation();
         removeRoom(room.id);

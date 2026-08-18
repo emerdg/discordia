@@ -1,3 +1,5 @@
+import '@fontsource-variable/inter';
+import '@fontsource-variable/sora';
 import './style.css';
 import { renderLanding } from './view/landing';
 import { renderUser } from './view/user';

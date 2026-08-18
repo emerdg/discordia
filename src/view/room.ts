@@ -6,6 +6,7 @@ import { appendMessages, loadBefore, loadRecent, nextSeq } from '../lib/idb';
 import { Mesh } from '../web/mesh';
 import { startCapture, stopStream } from '../web/media';
 import { escapeHtml, toast, withTimeout } from '../util/dom';
+import { icon, logoMark } from '../icons';
 import type { ChatMessage, MemberInfo, UserPrefs } from '../types';
 
 type WatchTarget = { kind: 'none' } | { kind: 'self' } | { kind: 'peer'; peerId: string };
@@ -70,15 +71,16 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     <div class="rr" id="room-root">
       <header class="rr-topbar">
         <div class="rr-row1">
-          <span class="rr-title">
-            <strong id="room-name">Sala</strong>
-            <code id="room-id">${roomId.toUpperCase()}</code>
+          <span class="rr-brand">
+            ${logoMark(28)}
+            <span class="brand-name" id="room-name">Sala</span>
+            <code class="rr-id" id="room-id">${roomId.toUpperCase()}</code>
           </span>
           <span class="rr-actions">
-            <button id="btn-copy-id" class="ghost" title="Copiar ID da sala">📋 Copiar ID</button>
-            <button id="btn-fs" class="ghost" title="Tela cheia">⛶</button>
-            <button id="btn-dbg" class="ghost" title="Diagnóstico">🛠</button>
-            <button id="btn-leave" class="danger">Sair</button>
+            <button id="btn-copy-id" class="icon-btn" title="Copiar ID da sala">${icon('copy', 17)}</button>
+            <button id="btn-fs" class="icon-btn" title="Tela cheia">${icon('fullscreen', 17)}</button>
+            <button id="btn-dbg" class="icon-btn" title="Diagnóstico">${icon('diag', 17)}</button>
+            <button id="btn-leave" class="danger">${icon('leave', 16)} Sair</button>
           </span>
         </div>
         <div class="rr-roster" id="roster"></div>
@@ -89,15 +91,15 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
         <aside class="rr-chat" id="chat-panel" data-side="${prefs.chatSide}">
           <div id="self-preview" class="self-preview" hidden>
             <video id="self-video" muted playsinline></video>
-            <span class="self-tag">Seu 📡</span>
-            <button id="self-toggle" class="self-toggle" title="Ver/pausar sua prévia">⏸</button>
+            <span class="self-tag">${icon('broadcast', 12)} Você</span>
+            <button id="self-toggle" class="self-toggle" title="Ver/pausar sua prévia"></button>
           </div>
-          <div class="chat-title">Chat da sala</div>
+          <div class="chat-title">${icon('chat', 15)} Chat da sala</div>
           <div class="chat-messages" id="chat-messages"></div>
           <button id="chat-more" class="ghost chat-more" hidden>Ver mensagens mais antigas</button>
           <form id="chat-form" class="chat-form">
             <input id="chat-input" type="text" placeholder="Mensagem..." autocomplete="off" maxlength="1000" />
-            <button type="submit" class="primary">➤</button>
+            <button type="submit" class="btn-primary" title="Enviar">${icon('send', 17)}</button>
           </form>
         </aside>
 
@@ -105,16 +107,23 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <div class="stage-view" id="stage-view">
             <video id="main-video" autoplay playsinline hidden></video>
             <div class="stage-placeholder" id="stage-placeholder">
-              <p>👀 Ninguém na tela ainda.</p>
+              <div class="ph-ic">${icon('monitor', 30)}</div>
+              <p>Ninguém na tela ainda.</p>
               <p class="hint">Clique em um participante no topo para assistir.</p>
             </div>
           </div>
           <div class="stage-tools">
             <div class="tools">
-              <button id="btn-transmit" class="primary">📡 Transmitir</button>
-              <div id="tx-options" class="tx-options" hidden>
-                <label class="tx-toggle"><input type="checkbox" id="tx-mic" ${prefs.mic ? 'checked' : ''}> 🎤 Microfone</label>
-                <label class="tx-toggle"><input type="checkbox" id="tx-pc" ${prefs.pcAudio ? 'checked' : ''}> 🔊 Áudio do PC</label>
+              <button id="btn-transmit" class="btn-primary">${icon('broadcast', 17)} Transmitir</button>
+              <div id="tx-options" class="tx-panel" hidden>
+                <label class="switch" title="Microfone">
+                  <input type="checkbox" id="tx-mic" ${prefs.mic ? 'checked' : ''}>
+                  ${icon('mic', 15)} Microfone
+                </label>
+                <label class="switch" title="Áudio do PC (sistema)">
+                  <input type="checkbox" id="tx-pc" ${prefs.pcAudio ? 'checked' : ''}>
+                  ${icon('audio', 15)} Áudio do PC
+                </label>
                 <label class="tx-res">Resolução
                   <select id="tx-res">
                     <option value="1080p" ${prefs.resolution === '1080p' ? 'selected' : ''}>1080p</option>
@@ -122,12 +131,12 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
                     <option value="480p" ${prefs.resolution === '480p' ? 'selected' : ''}>480p</option>
                   </select>
                 </label>
-                <button id="tx-apply" class="ghost" title="Aplica microfone/áudio/resolução na transmissão atual">Aplicar</button>
-                <button id="tx-start" class="primary">Iniciar transmissão</button>
+                <button id="tx-apply" class="tx-apply ghost" title="Aplica microfone/áudio/resolução na transmissão atual">Aplicar</button>
+                <button id="tx-start" class="btn-primary">Iniciar transmissão</button>
               </div>
             </div>
-            <span class="vol" id="vol-group">
-              <button id="btn-vol" class="ghost vol-btn" title="Silenciar">🔊</button>
+            <span class="vol" id="vol-group" title="Volume do que está assistindo">
+              <button id="btn-vol" class="icon-btn vol-btn"></button>
               <input id="vol-range" type="range" min="0" max="100" value="100" title="Volume" />
             </span>
             <span id="room-status" class="status"></span>
@@ -207,7 +216,6 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
         const live = document.createElement('span');
         live.className = 'live-dot';
         live.title = 'Transmitindo agora';
-        live.textContent = '🔴';
         chip.append(live);
       }
       const isWatching =
@@ -263,7 +271,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   // --------------------------------------------------------- prévia própria
 
   const syncSelfToggle = (): void => {
-    ui.selfToggle.textContent = ui.selfVideo.paused ? '▶' : '⏸';
+    ui.selfToggle.innerHTML = icon(ui.selfVideo.paused ? 'play' : 'pause', 14);
     ui.selfToggle.title = ui.selfVideo.paused ? 'Ver sua transmissão' : 'Pausar prévia';
   };
 
@@ -610,9 +618,12 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   ui.selfVideo.addEventListener('play', syncSelfToggle);
 
   const updateVolIcon = (): void => {
-    ui.btnVol.textContent =
-      ui.mainVideo.muted || ui.mainVideo.volume === 0 ? '🔇' : ui.mainVideo.volume < 0.5 ? '🔉' : '🔊';
+    const name =
+      ui.mainVideo.muted || ui.mainVideo.volume === 0 ? 'volMute' : ui.mainVideo.volume < 0.5 ? 'volMid' : 'volHigh';
+    ui.btnVol.innerHTML = icon(name, 16);
+    ui.btnVol.title = ui.mainVideo.muted ? 'Ativar som' : 'Silenciar';
   };
+  updateVolIcon();
   ui.btnVol.addEventListener('click', () => {
     ui.mainVideo.muted = !ui.mainVideo.muted;
     updateVolIcon();
