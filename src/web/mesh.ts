@@ -32,6 +32,39 @@ function candidateInit(c: RTCIceCandidate): RTCIceCandidateInit {
 }
 
 /**
+ * Buffer de candidatos ICE. Candidatos em trickle podem chegar antes do
+ * setRemoteDescription; adicioná-los cedo descarta a conexão. Espera o
+ * remote description ser aplicado e então descarrega a fila.
+ */
+interface IceBuffer {
+  queue: RTCIceCandidateInit[];
+  flushed: boolean;
+}
+
+const newIceBuffer = (): IceBuffer => ({ queue: [], flushed: false });
+
+function addIceBuffered(pc: RTCPeerConnection, cand: RTCIceCandidateInit, buf: IceBuffer): void {
+  const ready = pc.remoteDescription !== null;
+  if (!ready) {
+    buf.queue.push(cand);
+    return;
+  }
+  void pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => undefined);
+}
+
+async function flushIce(pc: RTCPeerConnection, buf: IceBuffer): Promise<void> {
+  if (buf.flushed) return;
+  buf.flushed = true;
+  for (const cand of buf.queue.splice(0)) {
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(cand));
+    } catch {
+      /* candidato inválido para o estado atual */
+    }
+  }
+}
+
+/**
  * Malha P2P baseada em RTCPeerConnection.
  *
  * - Presença + roster: via RTDB (nuvem, apenas "hub").
@@ -77,6 +110,19 @@ export class Mesh {
 
   get peerId(): string {
     return this.myId;
+  }
+
+  /** Estado atual, usado pelo painel de diagnóstico da sala. */
+  stats(): { peerId: string; roomId: string; members: number; links: number; linksTotal: number; watching: number; watchedBy: number } {
+    return {
+      peerId: this.myId,
+      roomId: this.roomId,
+      members: this.members.size,
+      links: [...this.links.values()].filter((l) => l.established).length,
+      linksTotal: this.links.size,
+      watching: this.mediaOut.size,
+      watchedBy: this.mediaIn.size,
+    };
   }
 
   /** Resolução usada ao enviar a própria transmissão. */
@@ -142,19 +188,19 @@ export class Mesh {
     link.dc = dc;
     this.wireDataChannel(link);
 
+    const iceBuf = newIceBuffer();
     link.cleanups.push(
       watchAnswer(this.roomId, peerId, me, async (ans) => {
         if (pc.signalingState !== 'stable') {
           try {
             await pc.setRemoteDescription(ans);
+            await flushIce(pc, iceBuf);
           } catch {
             /* oferecimento recusado */
           }
         }
       }),
-      watchIce(this.roomId, peerId, me, (c) => {
-        void pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => undefined);
-      }),
+      watchIce(this.roomId, peerId, me, (c) => addIceBuffered(pc, c, iceBuf)),
     );
 
     pc.onicecandidate = (e) => {
@@ -185,14 +231,13 @@ export class Mesh {
         if (!this.links.has(peerId) || this.stopped || link.dataPc) return;
         const pc = new RTCPeerConnection(iceConfig());
         link.dataPc = pc;
+        const iceBuf = newIceBuffer();
         pc.ondatachannel = (e) => {
           link.dc = e.channel;
           this.wireDataChannel(link);
         };
         link.cleanups.push(
-          watchIce(this.roomId, peerId, me, (c) => {
-            void pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => undefined);
-          }),
+          watchIce(this.roomId, peerId, me, (c) => addIceBuffered(pc, c, iceBuf)),
         );
         pc.onicecandidate = (e) => {
           if (e.candidate) void sendIce(this.roomId, me, peerId, candidateInit(e.candidate));
@@ -200,6 +245,7 @@ export class Mesh {
         this.wirePcEvents(pc, () => this.handleLinkClosed(link));
         try {
           await pc.setRemoteDescription(offer);
+          await flushIce(pc, iceBuf);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await sendAnswer(this.roomId, me, peerId, answer);
@@ -254,6 +300,7 @@ export class Mesh {
   private onLinkOpen(link: PeerLink): void {
     const dc = link.dc;
     if (!dc) return;
+    console.debug(`[mesh] data link aberto com ${link.peerId}`);
     try {
       dc.send(encodeWire({ type: 'hello', ...this.me }));
       if (!this.infoRequested) {
@@ -266,6 +313,7 @@ export class Mesh {
   }
 
   private handleLinkClosed(link: PeerLink): void {
+    console.debug(`[mesh] link com ${link.peerId} encerrado`);
     if (this.stopped) return;
     this.closeLink(link);
     const stillHere = this.members.has(link.peerId);
@@ -388,23 +436,24 @@ export class Mesh {
       if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') this.teardownWatch(peerId);
     };
 
+    const iceBuf = newIceBuffer();
     const unsubAnswer = watchAnswer(this.roomId, peerId, this.myId, async (ans) => {
       if (pc.signalingState !== 'stable') {
         try {
           await pc.setRemoteDescription(ans);
+          await flushIce(pc, iceBuf);
         } catch {
           /* noop */
         }
       }
     });
-    const unsubIce = watchIce(this.roomId, peerId, this.myId, (c) => {
-      void pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => undefined);
-    });
+    const unsubIce = watchIce(this.roomId, peerId, this.myId, (c) => addIceBuffered(pc, c, iceBuf));
 
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await sendOffer(this.roomId, this.myId, peerId, offer);
+      console.debug(`[mesh] assistindo ${peerId} — offer enviado`);
     } catch {
       unsubAnswer();
       unsubIce();
@@ -473,9 +522,8 @@ export class Mesh {
     pc.onicecandidate = (e) => {
       if (e.candidate) void sendIce(this.roomId, this.myId, peerId, candidateInit(e.candidate));
     };
-    const unsubIce = watchIce(this.roomId, peerId, this.myId, (c) => {
-      void pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => undefined);
-    });
+    const iceBuf = newIceBuffer();
+    const unsubIce = watchIce(this.roomId, peerId, this.myId, (c) => addIceBuffered(pc, c, iceBuf));
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
@@ -492,9 +540,11 @@ export class Mesh {
 
     try {
       await pc.setRemoteDescription(offer);
+      await flushIce(pc, iceBuf);
       for (const tr of pc.getTransceivers()) {
+        if (!tr.sender?.track) continue;
         tr.direction = 'sendonly';
-        if (tr.sender?.track?.kind === 'video') {
+        if (tr.sender.track.kind === 'video') {
           try {
             tr.setCodecPreferences(preferredVideoCodecs());
           } catch {

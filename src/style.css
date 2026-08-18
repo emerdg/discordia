@@ -563,6 +563,21 @@ select:focus {
   align-items: center;
 }
 
+.dbg {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  background: #0a0d13;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9fe8b0;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+
 .roster-chip {
   display: inline-flex;
   align-items: center;

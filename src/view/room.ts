@@ -68,10 +68,12 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <span class="rr-actions">
             <button id="btn-copy-id" class="ghost" title="Copiar ID da sala">📋 Copiar ID</button>
             <button id="btn-fs" class="ghost" title="Tela cheia">⛶</button>
+            <button id="btn-dbg" class="ghost" title="Diagnóstico">🛠</button>
             <button id="btn-leave" class="danger">Sair</button>
           </span>
         </div>
         <div class="rr-roster" id="roster"></div>
+        <pre id="dbg" class="dbg" hidden></pre>
       </header>
 
       <div class="rr-body">
@@ -460,6 +462,37 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
   });
 
+  // ---- diagnóstico
+  const dbgEl = $('dbg') as HTMLPreElement;
+  let dbgOn = false;
+  let dbgTimer: number | null = null;
+  const updateDbg = (): void => {
+    if (!dbgOn || cleanupDone) return;
+    const s = mesh.stats();
+    const names =
+      members
+        .map((m) => (m.peerId === s.peerId ? `${m.emoji}${m.name} (eu)` : `${m.emoji}${m.name}${m.sharing ? ' 🔴' : ''}`))
+        .join(', ') || '(nenhum)';
+    dbgEl.textContent = [
+      `Sala: ${roomId}   |   Seu peer: ${s.peerId}`,
+      `Participantes no banco: ${s.members} → ${names}`,
+      `Canais de dados abertos: ${s.links}/${s.linksTotal}`,
+      `Assistindo: ${s.watching}   |   Assistindo você: ${s.watchedBy}`,
+    ].join('\n');
+  };
+  ui.root.querySelector('#btn-dbg')?.addEventListener('click', () => {
+    dbgOn = !dbgOn;
+    dbgEl.hidden = !dbgOn;
+    if (dbgOn) {
+      updateDbg();
+      if (dbgTimer != null) clearInterval(dbgTimer);
+      dbgTimer = window.setInterval(updateDbg, 800);
+    } else if (dbgTimer != null) {
+      clearInterval(dbgTimer);
+      dbgTimer = null;
+    }
+  });
+
   ui.root.querySelector('#btn-leave')?.addEventListener('click', () => {
     void leave();
   });
@@ -496,6 +529,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   const leave = async (): Promise<void> => {
     if (cleanupDone) return;
     cleanupDone = true;
+    if (dbgTimer != null) clearInterval(dbgTimer);
     await stopTx();
     offMeta?.();
     await mesh.destroy();
@@ -506,35 +540,41 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   };
 
   const doJoin = async (): Promise<void> => {
-    const hist = getRoomHistory(roomId);
-    const meta = await readRoomMeta(roomId);
-    if (meta) {
-      mesh.setRoomInfo(meta.name, meta.maxUsers);
-      updateRoomName(meta.name);
-    } else if (hist) {
-      mesh.setRoomInfo(hist.name, 10);
-      updateRoomName(hist.name);
+    try {
+      const hist = getRoomHistory(roomId);
+      const meta = await readRoomMeta(roomId);
+      if (meta) {
+        mesh.setRoomInfo(meta.name, meta.maxUsers);
+        updateRoomName(meta.name);
+      } else if (hist) {
+        mesh.setRoomInfo(hist.name, 10);
+        updateRoomName(hist.name);
+      }
+
+      if (meta && (await countMembers(roomId)) >= meta.maxUsers) {
+        toast(`Sala cheia (máximo ${meta.maxUsers}).`);
+        location.hash = '#/user';
+        return;
+      }
+
+      offMeta = watchRoomMeta(roomId, (m) => {
+        if (m) updateRoomName(m.name);
+      });
+
+      await mesh.join();
+      await initChat();
+      setStatus('Conectado. Clique em um participante para assistir ou transmita sua tela.');
+      void ui.chatInput.focus();
+    } catch (err) {
+      console.error('[sala] falha ao entrar:', err);
+      toast('Falha ao entrar na sala. Pressione F12 e veja o console.');
     }
-
-    if (meta && (await countMembers(roomId)) >= meta.maxUsers) {
-      toast(`Sala cheia (máximo ${meta.maxUsers}).`);
-      location.hash = '#/user';
-      return;
-    }
-
-    offMeta = watchRoomMeta(roomId, (m) => {
-      if (m) updateRoomName(m.name);
-    });
-
-    await mesh.join();
-    await initChat();
-    setStatus('Conectado. Clique em um participante para assistir ou transmita sua tela.');
-    void ui.chatInput.focus();
   };
 
   return async () => {
     if (!cleanupDone) {
       cleanupDone = true;
+      if (dbgTimer != null) clearInterval(dbgTimer);
       await stopTx();
       offMeta?.();
       await mesh.destroy();

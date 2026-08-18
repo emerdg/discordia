@@ -135,7 +135,7 @@ export function renderUser(container: HTMLElement): void {
         return;
       }
       const maxUsers = Number((maxSelect as HTMLSelectElement).value || 5);
-      const id = randomId();
+      const id = normalizeRoomId(randomId());
       const meta = {
         name,
         maxUsers,
@@ -158,7 +158,10 @@ export function renderUser(container: HTMLElement): void {
     });
 
     const joinRoom = (raw: string): void => {
-      const id = normalizeRoomId(raw);
+      // Aceita "K7QWX2D", "k7qwx2d" ou URLs/links com #/room/K7QWX2D
+      const linkMatch = raw.match(/room\/[A-Za-z0-9]{4,16}/i);
+      const rawId = linkMatch ? linkMatch[0].split('/').pop() as string : raw;
+      const id = normalizeRoomId(rawId);
       if (!isValidRoomId(id)) {
         toast('ID inválido. Use o ID exibido na sala.');
         return;
