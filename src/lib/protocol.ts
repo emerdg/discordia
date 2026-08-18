@@ -8,6 +8,7 @@ export type Wire =
   | { type: 'room-info-res'; name: string; maxUsers: number }
   | { type: 'chat'; message: WireChat }
   | { type: 'unwatch' }
+  | { type: 'refresh-media' }
   | { type: 'pong'; ts: number };
 
 export function encodeWire(msg: Wire): string {

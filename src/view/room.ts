@@ -24,11 +24,16 @@ interface RoomUi {
   placeholder: HTMLElement;
   selfPreview: HTMLElement;
   selfVideo: HTMLVideoElement;
+  selfToggle: HTMLButtonElement;
   txOptions: HTMLElement;
   txMic: HTMLInputElement;
   txPc: HTMLInputElement;
   txRes: HTMLSelectElement;
+  txApply: HTMLButtonElement;
   txStart: HTMLButtonElement;
+  volGroup: HTMLElement;
+  btnVol: HTMLButtonElement;
+  volRange: HTMLInputElement;
   status: HTMLElement;
 }
 
@@ -45,6 +50,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   let mesh: Mesh;
   let localStream: MediaStream | null = null;
   let transmitting = false;
+  let capturedMic = false;
+  let capturedPcAudio = false;
   let watching: WatchTarget = { kind: 'none' };
   const watchers = new Map<string, boolean>();
   let cleanupDone = false;
@@ -83,6 +90,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <div id="self-preview" class="self-preview" hidden>
             <video id="self-video" muted playsinline></video>
             <span class="self-tag">Seu 📡</span>
+            <button id="self-toggle" class="self-toggle" title="Ver/pausar sua prévia">⏸</button>
           </div>
           <div class="chat-title">Chat da sala</div>
           <div class="chat-messages" id="chat-messages"></div>
@@ -114,9 +122,14 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
                     <option value="480p" ${prefs.resolution === '480p' ? 'selected' : ''}>480p</option>
                   </select>
                 </label>
+                <button id="tx-apply" class="ghost" title="Aplica microfone/áudio/resolução na transmissão atual">Aplicar</button>
                 <button id="tx-start" class="primary">Iniciar transmissão</button>
               </div>
             </div>
+            <span class="vol" id="vol-group">
+              <button id="btn-vol" class="ghost vol-btn" title="Silenciar">🔊</button>
+              <input id="vol-range" type="range" min="0" max="100" value="100" title="Volume" />
+            </span>
             <span id="room-status" class="status"></span>
           </div>
         </main>
@@ -144,11 +157,16 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     placeholder: $('stage-placeholder'),
     selfPreview: $('self-preview'),
     selfVideo: $('self-video') as HTMLVideoElement,
+    selfToggle: $('self-toggle') as HTMLButtonElement,
     txOptions: $('tx-options'),
     txMic: $('tx-mic') as HTMLInputElement,
     txPc: $('tx-pc') as HTMLInputElement,
     txRes: $('tx-res') as HTMLSelectElement,
+    txApply: $('tx-apply') as HTMLButtonElement,
     txStart: $('tx-start') as HTMLButtonElement,
+    volGroup: $('vol-group'),
+    btnVol: $('btn-vol') as HTMLButtonElement,
+    volRange: $('vol-range') as HTMLInputElement,
     status: $('room-status'),
   };
 
@@ -244,6 +262,31 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   // --------------------------------------------------------- prévia própria
 
+  const syncSelfToggle = (): void => {
+    ui.selfToggle.textContent = ui.selfVideo.paused ? '▶' : '⏸';
+    ui.selfToggle.title = ui.selfVideo.paused ? 'Ver sua transmissão' : 'Pausar prévia';
+  };
+
+  /** Mostra a prévia pausada (após capturar o 1º quadro) — sem impactar a transmissão. */
+  const playPreviewOnce = (): void => {
+    void ui.selfVideo.play().then(() => {
+      const video = ui.selfVideo as unknown as { requestVideoFrameCallback?: (cb: () => void) => void };
+      const pauseNow = (): void => {
+        try {
+          ui.selfVideo.pause();
+        } catch {
+          /* noop */
+        }
+        syncSelfToggle();
+      };
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        video.requestVideoFrameCallback(pauseNow);
+      } else {
+        setTimeout(pauseNow, 350);
+      }
+    });
+  };
+
   const toggleSelfView = (): void => {
     if (!localStream) {
       setStatus('Você ainda não está transmitindo.');
@@ -283,27 +326,55 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     mesh.setResolution(resolution);
     await mesh.setTransmitting(true);
     transmitting = true;
+    capturedMic = capture.mic;
+    capturedPcAudio = capture.pcAudio;
     ui.txStart.textContent = 'Parar transmissão';
     ui.selfPreview.hidden = false;
     ui.selfVideo.srcObject = localStream;
-    void ui.selfVideo.play().then(() => {
-      const pauseAfterFrame = (): void => {
-        try {
-          ui.selfVideo.pause();
-        } catch {
-          /* noop */
-        }
-      };
-      const video = ui.selfVideo as unknown as { requestVideoFrameCallback?: (cb: () => void) => void };
-      if (typeof video.requestVideoFrameCallback === 'function') {
-        video.requestVideoFrameCallback(pauseAfterFrame);
-      } else {
-        setTimeout(pauseAfterFrame, 350);
-      }
-    });
+    playPreviewOnce();
     ui.selfPreview.classList.add('on');
     setStatus('Transmitindo. Clique em você ou em outros para ver.');
     renderRoster(members);
+  };
+
+  /** Reaplica microfone/áudio/resolução na transmissão atual. */
+  const applyTx = async (): Promise<void> => {
+    const next = {
+      mic: ui.txMic.checked,
+      pcAudio: ui.txPc.checked,
+      resolution: ui.txRes.value as UserPrefs['resolution'],
+    };
+    patchPrefs(next);
+    mesh.setResolution(next.resolution);
+
+    if (!transmitting) {
+      toast('Configurações salvas. Elas valem ao iniciar a transmissão.');
+      return;
+    }
+
+    const captureChanged = next.mic !== capturedMic || next.pcAudio !== capturedPcAudio;
+    try {
+      if (captureChanged) {
+        setStatus('Selecione a tela novamente para aplicar o áudio…');
+        const fresh = await startCapture({ ...next });
+        const old = localStream;
+        localStream = fresh;
+        mesh.setLocalStream(fresh);
+        if (old) stopStream(old);
+        capturedMic = next.mic;
+        capturedPcAudio = next.pcAudio;
+        ui.selfVideo.srcObject = fresh;
+        playPreviewOnce();
+        if (watching.kind === 'self') {
+          ui.mainVideo.srcObject = fresh;
+        }
+      }
+      mesh.closeIncoming();
+      mesh.requestMediaRefresh();
+      setStatus('Alterações aplicadas. Reconectando espectadores…');
+    } catch {
+      setStatus('Captura cancelada — nada foi alterado.');
+    }
   };
 
   const stopTx = async (): Promise<void> => {
@@ -316,6 +387,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       stopStream(localStream);
       localStream = null;
     }
+    capturedMic = false;
+    capturedPcAudio = false;
     ui.selfPreview.hidden = true;
     ui.selfVideo.srcObject = null;
     ui.txStart.textContent = 'Iniciar transmissão';
@@ -521,6 +594,34 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   ui.txStart.addEventListener('click', () => {
     if (transmitting) void stopTx();
     else void startTx();
+  });
+
+  ui.txApply.addEventListener('click', () => void applyTx());
+
+  ui.selfToggle.addEventListener('click', () => {
+    if (ui.selfVideo.paused) {
+      void ui.selfVideo.play().catch(() => undefined);
+    } else {
+      ui.selfVideo.pause();
+    }
+    syncSelfToggle();
+  });
+  ui.selfVideo.addEventListener('pause', syncSelfToggle);
+  ui.selfVideo.addEventListener('play', syncSelfToggle);
+
+  const updateVolIcon = (): void => {
+    ui.btnVol.textContent =
+      ui.mainVideo.muted || ui.mainVideo.volume === 0 ? '🔇' : ui.mainVideo.volume < 0.5 ? '🔉' : '🔊';
+  };
+  ui.btnVol.addEventListener('click', () => {
+    ui.mainVideo.muted = !ui.mainVideo.muted;
+    updateVolIcon();
+  });
+  ui.volRange.addEventListener('input', () => {
+    const v = Number(ui.volRange.value) / 100;
+    ui.mainVideo.volume = v;
+    ui.mainVideo.muted = !(v > 0);
+    updateVolIcon();
   });
 
   ui.txRes.addEventListener('change', () => {

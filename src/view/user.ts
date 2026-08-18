@@ -2,7 +2,7 @@ import { firebaseMissing, firebaseReady } from '../lib/firebase';
 import { isValidRoomId, newPeerId, normalizeRoomId, randomId } from '../lib/config';
 import { countMembers, readRoomMeta, writeRoomMeta } from '../lib/presence';
 import {
-  EMOJIS,
+  EMOJI_CATEGORIES,
   PRESET_COLORS,
   addRoom,
   clearRooms,
@@ -255,18 +255,25 @@ export function renderUser(container: HTMLElement): void {
     // emojis
     const grid = container.querySelector('#emoji-grid');
     if (grid) {
-      EMOJIS.forEach((e) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'emoji-btn' + (e === prefs.emoji ? ' active' : '');
-        b.textContent = e;
-        b.addEventListener('click', () => {
-          prefs = patchPrefs({ emoji: e });
-          grid.querySelectorAll('.emoji-btn').forEach((x) => x.classList.toggle('active', x === b));
-          refreshChip();
-          toast(`Emoji: ${e}`);
+      EMOJI_CATEGORIES.forEach((cat) => {
+        const head = document.createElement('div');
+        head.className = 'emoji-cat-head';
+        head.textContent = cat.label;
+        grid.append(head);
+        cat.emojis.forEach((e) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'emoji-btn' + (e === prefs.emoji ? ' active' : '');
+          b.textContent = e;
+          b.title = `${cat.label} · ${e}`;
+          b.addEventListener('click', () => {
+            prefs = patchPrefs({ emoji: e });
+            grid.querySelectorAll('.emoji-btn').forEach((x) => x.classList.toggle('active', x === b));
+            refreshChip();
+            toast(`Emoji: ${e}`);
+          });
+          grid.append(b);
         });
-        grid.append(b);
       });
     }
 

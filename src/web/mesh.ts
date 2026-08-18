@@ -367,8 +367,31 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
       case 'unwatch':
         this.unwatchMe(fromId);
         break;
+      case 'refresh-media':
+        // O transmissor reaplicou configurações: espectadores reconectam.
+        if (this.mediaOut.has(fromId)) {
+          this.unwatch(fromId);
+          window.setTimeout(() => {
+            if (!this.stopped && this.members.get(fromId)?.sharing) {
+              void this.watch(fromId);
+            }
+          }, 400);
+        }
+        break;
       default:
         break;
+    }
+  }
+
+  /** Pede aos espectadores que reconectem sua transmissão (configs aplicadas). */
+  requestMediaRefresh(): void {
+    for (const link of this.links.values()) {
+      if (!link.established || !link.dc) continue;
+      try {
+        link.dc.send(encodeWire({ type: 'refresh-media' }));
+      } catch {
+        /* par caiu no meio */
+      }
     }
   }
 
