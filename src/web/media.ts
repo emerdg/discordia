@@ -1,0 +1,151 @@
+import { CONFIG } from '../lib/config';
+import type { Resolution } from '../types';
+
+export interface CapturePrefs {
+  resolution: Resolution;
+  mic: boolean;
+  pcAudio: boolean;
+}
+
+/**
+ * Captura de tela + áudio. A captura do display é feita pelo pipeline do
+ * sistema (GPU) e a codificação é delegada ao encoder de hardware do
+ * navegador (NVENC / Intel Quick Sync / AMD VCN / VideoToolbox), sem pesar
+ * na CPU. Para conferir qual encoder foi usado: chrome://media-internals.
+ */
+export async function startCapture(prefs: CapturePrefs): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('Seu navegador não suporta captura de tela (getDisplayMedia).');
+  }
+
+  const { width, height } = targetDimensions(prefs.resolution);
+  const screen = await navigator.mediaDevices.getDisplayMedia({
+    video: {
+      width: { ideal: width, max: 1920 },
+      height: { ideal: height, max: 1080 },
+      frameRate: { ideal: 30, max: 60 },
+      displaySurface: 'monitor',
+    },
+    audio: prefs.pcAudio,
+  });
+
+  const screenTrack = screen.getVideoTracks()[0];
+  if (screenTrack) {
+    screenTrack.addEventListener('ended', () => {
+      for (const t of screen.getTracks()) t.stop();
+    });
+  }
+
+  const mic = await captureMic(prefs.mic);
+  if (mic) {
+    for (const track of mic.getAudioTracks()) {
+      if (!screen.getAudioTracks().some((t) => t.enabled)) {
+        screen.addTrack(track);
+      } else {
+        track.stop();
+      }
+    }
+  }
+
+  // Sem nenhuma track de áudio é normal (PC áudio desligado + mic desligado).
+  if (prefs.mic && !screen.getAudioTracks().length) {
+    // usuário negou o microfone: segue só com a tela
+  }
+
+  return screen;
+}
+
+async function captureMic(on: boolean): Promise<MediaStream | null> {
+  if (!on) return null;
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function targetDimensions(resolution: Resolution): { width: number; height: number } {
+  switch (resolution) {
+    case '1080p':
+      return { width: 1920, height: 1080 };
+    case '480p':
+      return { width: 854, height: 480 };
+    default:
+      return { width: 1280, height: 720 };
+  }
+}
+
+export function maxBitrate(resolution: Resolution): number {
+  switch (resolution) {
+    case '1080p':
+      return 4_000_000;
+    case '480p':
+      return 900_000;
+    default:
+      return 2_500_000;
+  }
+}
+
+/** Fator de redução para não enviar mais resolução que o selecionado. */
+export function scaleDownFor(track: MediaStreamTrack, resolution: Resolution): number {
+  const settings = track.getSettings?.() ?? {};
+  const srcW = settings.width || 1920;
+  const srcH = settings.height || 1080;
+  const { width: targetW, height: targetH } = targetDimensions(resolution);
+  const srcMax = Math.max(srcW, srcH);
+  const targetMax = Math.max(targetW, targetH);
+  if (srcMax <= targetMax) return 1;
+  const factor = srcMax / targetMax;
+  return Math.min(factor, 4);
+}
+
+/** Parâmetros de codificação para a resolução escolhida. */
+export function encodingsFor(track: MediaStreamTrack, resolution: Resolution): RTCRtpEncodingParameters[] {
+  return [
+    {
+      maxBitrate: maxBitrate(resolution),
+      scaleResolutionDownBy: scaleDownFor(track, resolution),
+    },
+  ];
+}
+
+/**
+ * Prefere codecs com encoder de hardware. Em navegadores baseados em Chromium
+ * o H.264 e o VP9 costumam ser acelerados por GPU (NVENC/Quick Sync/VCN).
+ */
+export function preferredVideoCodecs(): RTCRtpCodec[] {
+  const caps = typeof RTCRtpSender !== 'undefined' ? RTCRtpSender.getCapabilities?.('video') : null;
+  if (!caps?.codecs) return [];
+  const usable = caps.codecs.filter(
+    (c) =>
+      c.mimeType !== 'video/red' &&
+      c.mimeType !== 'video/ulpfec' &&
+      c.mimeType !== 'video/rtx' &&
+      c.mimeType !== 'video/flexfec',
+  );
+  const rank = (mime: string): number => {
+    if (mime === 'video/H264') return 0;
+    if (mime === 'video/VP9') return 1;
+    if (mime === 'video/AV1') return 2;
+    if (mime === 'video/VP8') return 3;
+    return 4;
+  };
+  return usable.sort((a, b) => rank(a.mimeType) - rank(b.mimeType)).slice(0, 6);
+}
+
+export function stopStream(stream: MediaStream | null): void {
+  if (!stream) return;
+  for (const track of stream.getTracks()) {
+    try {
+      track.stop();
+    } catch {
+      /* noop */
+    }
+  }
+}
+
+export function iceConfig(): RTCConfiguration {
+  return { iceServers: CONFIG.iceServers };
+}

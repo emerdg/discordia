@@ -1,0 +1,24 @@
+{
+  "name": "discordia",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Compartilhamento de tela em grupo, 100% P2P via WebRTC. Firebase usado apenas como hub de sinalização.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy --only hosting,database"
+  },
+  "dependencies": {
+    "firebase": "^12.17.1"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.27.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.2.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
