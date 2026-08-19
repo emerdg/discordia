@@ -25,6 +25,11 @@ export const PRESET_COLORS: { hex: string; label: string }[] = [
   { hex: '#69f0ae', label: 'Verde' },
   { hex: '#ffd740', label: 'Amarelo' },
   { hex: '#e040fb', label: 'Roxo' },
+  { hex: '#ff9f0a', label: 'Laranja' },
+  { hex: '#ff5fa2', label: 'Rosa' },
+  { hex: '#26c6da', label: 'Ciano' },
+  { hex: '#aeea00', label: 'Limão' },
+  { hex: '#f1f3ff', label: 'Branco' },
 ];
 
 export const DEFAULT_COLOR = PRESET_COLORS[0].hex;

@@ -91,22 +91,76 @@ html[data-theme="intel-light"] body {
 }
 
 /* Paletas de marca (escuro herda as superfícies escuras de :root) */
-[data-theme="intel-dark"],
+[data-theme="intel-dark"] {
+  --a-1: #0071c5;
+  --a-2: #00a2ff;
+  --bg-0: #04060f;
+  --bg-1: #070b1a;
+  --bg-2: #0c1226;
+  --bg-3: #131b33;
+  --panel: #0a1122;
+  --panel-2: #101a30;
+  --border: #1c2842;
+}
+
 [data-theme="intel-light"] {
   --a-1: #0071c5;
   --a-2: #00a2ff;
+  --bg-0: #eef4fb;
+  --bg-1: #f4f9ff;
+  --bg-2: #ffffff;
+  --bg-3: #e0ebf8;
+  --panel: #ffffff;
+  --panel-2: #f0f6fd;
+  --border: #d3e2f5;
 }
 
-[data-theme="amd-dark"],
+[data-theme="amd-dark"] {
+  --a-1: #ff3b30;
+  --a-2: #ed1c24;
+  --bg-0: #120506;
+  --bg-1: #170809;
+  --bg-2: #200c0e;
+  --bg-3: #2b1114;
+  --panel: #1c0a0c;
+  --panel-2: #260f12;
+  --border: #3a1619;
+}
+
 [data-theme="amd-light"] {
   --a-1: #ff3b30;
   --a-2: #ed1c24;
+  --bg-0: #fbf0f0;
+  --bg-1: #fff7f6;
+  --bg-2: #ffffff;
+  --bg-3: #f7e4e4;
+  --panel: #ffffff;
+  --panel-2: #fbeeee;
+  --border: #f0d5d5;
 }
 
-[data-theme="nvidia-dark"],
+[data-theme="nvidia-dark"] {
+  --a-1: #76b900;
+  --a-2: #8be04a;
+  --bg-0: #050c05;
+  --bg-1: #081209;
+  --bg-2: #0e1a10;
+  --bg-3: #152518;
+  --panel: #0b150d;
+  --panel-2: #122216;
+  --border: #1f3523;
+}
+
 [data-theme="nvidia-light"] {
   --a-1: #76b900;
   --a-2: #8be04a;
+  --bg-0: #f0f7ee;
+  --bg-1: #f6fbf4;
+  --bg-2: #ffffff;
+  --bg-3: #e3f0de;
+  --panel: #ffffff;
+  --panel-2: #f1f8ee;
+  --border: #d7ead1;
 }
 
 * {
@@ -823,17 +877,17 @@ select {
 
 .themes {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .theme-opt {
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 8px 10px;
+  gap: 6px;
+  padding: 8px 4px;
   background: var(--bg-2);
   border: 1px solid var(--border-soft);
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 .theme-opt:hover {
@@ -842,15 +896,19 @@ select {
 
 .theme-opt .theme-swatch {
   width: 100%;
-  height: 34px;
-  border-radius: 9px;
+  height: 26px;
+  border-radius: 8px;
 }
 
 .theme-opt .theme-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .theme-opt.active {
