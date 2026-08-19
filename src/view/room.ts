@@ -116,6 +116,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           </div>
           <div class="stage-tools">
             <div class="tools">
+              <button id="btn-chat-toggle" class="icon-btn chat-toggle-btn" title="Chat">${icon('chat', 17)}</button>
               <button id="btn-transmit" class="btn-primary">${icon('broadcast', 17)} Transmitir</button>
               <div id="tx-options" class="tx-panel" hidden>
                 <label class="switch" title="Microfone">
@@ -569,6 +570,12 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   };
 
   ui.root.querySelector('#btn-copy-id')?.addEventListener('click', copyId);
+
+  // botão de chat (visível no mobile): abre/fecha o painel
+  const chatPanelEl = $('chat-panel');
+  ui.root.querySelector('#btn-chat-toggle')?.addEventListener('click', () => {
+    chatPanelEl.classList.toggle('open');
+  });
 
   const fullscreenRoot = ui.root;
   const onFsChange = (): void => {

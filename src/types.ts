@@ -1,7 +1,15 @@
 export type Resolution = '1080p' | '720p' | '480p';
 export type ChatSide = 'left' | 'right';
 export type ChatHistoryLimit = 0 | 25 | 50 | 100;
-export type Theme = 'dark' | 'light';
+export type Theme =
+  | 'dark'
+  | 'light'
+  | 'nvidia-dark'
+  | 'nvidia-light'
+  | 'amd-dark'
+  | 'amd-light'
+  | 'intel-dark'
+  | 'intel-light';
 export type CodecPref = 'vp8' | 'h264';
 
 export interface UserPrefs {

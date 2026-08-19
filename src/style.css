@@ -30,7 +30,7 @@
   --radius: 16px;
   --radius-sm: 10px;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-  --glow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 12px 40px rgba(108, 123, 255, 0.18);
+  --glow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 12px 40px color-mix(in srgb, var(--a-1) 18%, transparent);
 
   --font-body: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-display: "Sora Variable", "Inter Variable", system-ui, sans-serif;
@@ -46,9 +46,13 @@
   --thumb-h: rgba(255, 255, 255, 0.2);
 }
 
-/* ================================ TEMA CLARO ================================ */
+/* ================================ TEMAS ================================ */
 
-[data-theme="light"] {
+/* Claro — superfícies compartilhadas (Discórdia, NVIDIA, AMD, Intel) */
+[data-theme="light"],
+[data-theme="nvidia-light"],
+[data-theme="amd-light"],
+[data-theme="intel-light"] {
   --bg-0: #eef0f7;
   --bg-1: #f6f7fb;
   --bg-2: #ffffff;
@@ -76,11 +80,33 @@
   --thumb-h: rgba(40, 45, 80, 0.28);
 }
 
-html[data-theme="light"] body {
+html[data-theme="light"] body,
+html[data-theme="nvidia-light"] body,
+html[data-theme="amd-light"] body,
+html[data-theme="intel-light"] body {
   background:
-    radial-gradient(1100px 560px at 85% -10%, rgba(108, 123, 255, 0.1), transparent 60%),
+    radial-gradient(1100px 560px at 85% -10%, color-mix(in srgb, var(--a-1) 10%, transparent), transparent 60%),
     radial-gradient(900px 480px at 8% 108%, rgba(168, 85, 247, 0.08), transparent 60%),
     var(--bg-1);
+}
+
+/* Paletas de marca (escuro herda as superfícies escuras de :root) */
+[data-theme="intel-dark"],
+[data-theme="intel-light"] {
+  --a-1: #0071c5;
+  --a-2: #00a2ff;
+}
+
+[data-theme="amd-dark"],
+[data-theme="amd-light"] {
+  --a-1: #ff3b30;
+  --a-2: #ed1c24;
+}
+
+[data-theme="nvidia-dark"],
+[data-theme="nvidia-light"] {
+  --a-1: #76b900;
+  --a-2: #8be04a;
 }
 
 * {
@@ -134,7 +160,7 @@ a:hover {
 }
 
 ::selection {
-  background: rgba(108, 123, 255, 0.35);
+  background: color-mix(in srgb, var(--a-1) 35%, transparent);
 }
 
 /* ------------------------------- scrollbars ------------------------------- */
@@ -175,7 +201,7 @@ button {
 }
 
 button:hover {
-  border-color: rgba(108, 123, 255, 0.6);
+  border-color: color-mix(in srgb, var(--a-1) 60%, transparent);
 }
 
 button:active {
@@ -205,14 +231,14 @@ button.primary {
   border: none;
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 8px 22px rgba(139, 92, 246, 0.35);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--a-2) 35%, transparent);
 }
 
 .btn-primary:hover,
 button.primary:hover {
   filter: brightness(1.08);
   transform: translateY(-1px);
-  box-shadow: 0 12px 26px rgba(139, 92, 246, 0.45);
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--a-2) 45%, transparent);
 }
 
 .btn-ghost,
@@ -264,7 +290,7 @@ input::placeholder {
 input:focus,
 select:focus {
   border-color: var(--a-1);
-  box-shadow: 0 0 0 3px rgba(108, 123, 255, 0.22);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--a-1) 22%, transparent);
   outline: none;
 }
 
@@ -319,7 +345,7 @@ select {
   padding: 11px 20px;
   border-radius: 999px;
   z-index: 1000;
-  box-shadow: var(--shadow), 0 0 30px rgba(108, 123, 255, 0.15);
+  box-shadow: var(--shadow), 0 0 30px color-mix(in srgb, var(--a-1) 15%, transparent);
   font-size: 14px;
   font-weight: 600;
   animation: toast-in 0.18s ease;
@@ -376,7 +402,7 @@ select {
   border-radius: 28px;
   display: grid;
   place-items: center;
-  background: rgba(108, 123, 255, 0.1);
+  background: color-mix(in srgb, var(--a-1) 10%, transparent);
   box-shadow: var(--glow);
   animation: float-in 0.5s ease;
   margin-bottom: 10px;
@@ -460,14 +486,14 @@ select {
 }
 
 .strip-emoji:hover {
-  background: rgba(108, 123, 255, 0.14);
-  border-color: rgba(108, 123, 255, 0.3);
+  background: color-mix(in srgb, var(--a-1) 14%, transparent);
+  border-color: color-mix(in srgb, var(--a-1) 30%, transparent);
 }
 
 .strip-emoji.active {
   background: var(--grad);
   border-color: transparent;
-  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--a-2) 40%, transparent);
 }
 
 .landing-footer {
@@ -580,7 +606,7 @@ select {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  background: rgba(108, 123, 255, 0.14);
+  background: color-mix(in srgb, var(--a-1) 14%, transparent);
   color: var(--a-1);
 }
 
@@ -653,7 +679,7 @@ select {
 }
 
 .history-enter:hover {
-  border-color: rgba(108, 123, 255, 0.5);
+  border-color: color-mix(in srgb, var(--a-1) 50%, transparent);
 }
 
 .history-enter .history-name {
@@ -718,7 +744,7 @@ select {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  background: rgba(108, 123, 255, 0.14);
+  background: color-mix(in srgb, var(--a-1) 14%, transparent);
   color: var(--a-1);
 }
 
@@ -791,6 +817,48 @@ select {
   letter-spacing: 0.08em;
 }
 
+.setting-theme {
+  grid-column: 1 / -1;
+}
+
+.themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.theme-opt {
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+}
+
+.theme-opt:hover {
+  border-color: var(--a-1);
+}
+
+.theme-opt .theme-swatch {
+  width: 100%;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.theme-opt .theme-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.theme-opt.active {
+  border-color: var(--a-1);
+  outline: 2px solid color-mix(in srgb, var(--a-1) 45%, transparent);
+  outline-offset: 1px;
+}
+
 .seg {
   display: inline-flex;
   background: var(--bg-2);
@@ -814,7 +882,7 @@ select {
   background: var(--grad);
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.3);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--a-2) 30%, transparent);
 }
 
 .colors {
@@ -924,14 +992,14 @@ select {
 }
 
 .emoji-btn:hover {
-  background: rgba(108, 123, 255, 0.14);
-  border-color: rgba(108, 123, 255, 0.3);
+  background: color-mix(in srgb, var(--a-1) 14%, transparent);
+  border-color: color-mix(in srgb, var(--a-1) 30%, transparent);
 }
 
 .emoji-btn.active {
   background: var(--grad);
   border-color: transparent;
-  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--a-2) 40%, transparent);
 }
 
 /* ================================ SALA ================================ */
@@ -1053,8 +1121,8 @@ select {
 
 .roster-chip.active {
   border-color: var(--a-1);
-  background: rgba(108, 123, 255, 0.14);
-  box-shadow: 0 0 0 1px rgba(108, 123, 255, 0.35);
+  background: color-mix(in srgb, var(--a-1) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--a-1) 35%, transparent);
 }
 
 .dbg {
@@ -1248,7 +1316,7 @@ select {
   flex: 1;
   position: relative;
   background:
-    radial-gradient(600px 360px at 50% 40%, rgba(108, 123, 255, 0.06), transparent 70%),
+    radial-gradient(600px 360px at 50% 40%, color-mix(in srgb, var(--a-1) 6%, transparent), transparent 70%),
     var(--stage-bg);
   min-height: 0;
 }
@@ -1281,7 +1349,7 @@ select {
   border-radius: 24px;
   display: grid;
   place-items: center;
-  background: rgba(108, 123, 255, 0.1);
+  background: color-mix(in srgb, var(--a-1) 10%, transparent);
   border: 1px solid var(--border-soft);
   color: var(--a-1);
 }
@@ -1476,7 +1544,51 @@ select {
 
 /* ------------------------------- responsivo ------------------------------- */
 
+.chat-toggle-btn {
+  display: none;
+}
+
 @media (max-width: 720px) {
+  .chat-toggle-btn {
+    display: inline-flex;
+  }
+
+  .rr:not(.fs) .rr-body {
+    position: relative;
+  }
+
+  .rr:not(.fs) .rr-chat {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: min(86vw, 330px);
+    z-index: 60;
+    box-shadow: var(--shadow);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .rr:not(.fs) .rr-chat[data-side="left"] {
+    left: 0;
+    transform: translateX(-102%);
+  }
+
+  .rr:not(.fs) .rr-chat[data-side="right"] {
+    right: 0;
+    transform: translateX(102%);
+  }
+
+  .rr:not(.fs) .rr-chat.open {
+    transform: translateX(0);
+  }
+
+  .stage-tools {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .vol input[type="range"] {
+    width: 80px;
+  }
+
   .rr-topbar {
     padding: 8px 10px;
   }

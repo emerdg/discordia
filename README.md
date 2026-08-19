@@ -78,6 +78,13 @@ mensagens** e um botão **"ver mais"** busca as mais antigas.
 - **Filtro de spam**: no máximo 1 mensagem a cada 10 segundos.
 - **Links clicáveis**: `http(s)://...` aparecem como links no chat.
 
+### Personalização
+
+- **8 temas** de cores: Discórdia (padrão), NVIDIA, AMD e Intel, cada um em
+  versões **claro** e **escuro**.
+- **Responsivo**: em telas pequenas o chat vira um painel lateral que abre e
+  fecha pelo botão de chat; o restante do layout se adapta ao celular.
+
 ## Como usar
 
 1. Abra `https://mostrapraeu.web.app` (ou rode localmente, abaixo).

@@ -14,8 +14,8 @@ import {
 import { searchEmojis } from '../lib/emojiNames';
 import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
-import { setTheme } from '../lib/theme';
-import type { ChatHistoryLimit, ChatSide, CodecPref, Theme } from '../types';
+import { setTheme, THEMES } from '../lib/theme';
+import type { ChatHistoryLimit, ChatSide, CodecPref } from '../types';
 
 export function renderUser(container: HTMLElement): void {
   let prefs = getPrefs();
@@ -77,12 +77,9 @@ export function renderUser(container: HTMLElement): void {
           <div id="settings-wrap" class="settings-wrap">
             <div id="settings-panel" class="settings-panel">
               <div class="settings-grid">
-                <div class="setting">
+                <div class="setting setting-theme">
                   <span class="setting-label">Tema</span>
-                  <div class="seg" id="theme-seg">
-                    <button data-theme="dark" class="seg-btn">${icon('moon', 15)} Escuro</button>
-                    <button data-theme="light" class="seg-btn">${icon('sun', 15)} Claro</button>
-                  </div>
+                  <div class="themes" id="theme-picker"></div>
                 </div>
                 <div class="setting">
                   <span class="setting-label">Codec de vídeo (ao transmitir)</span>
@@ -231,24 +228,23 @@ export function renderUser(container: HTMLElement): void {
       settingsBtn.setAttribute('aria-expanded', String(open));
     });
 
-    // tema
-    const themeSeg = container.querySelector('#theme-seg');
-    if (themeSeg) {
-      const markTheme = (t: Theme): void => {
-        themeSeg.querySelectorAll('.seg-btn').forEach((b) => {
-          b.classList.toggle('active', b.getAttribute('data-theme') === t);
-        });
-      };
-      markTheme(prefs.theme);
-      themeSeg.querySelectorAll('.seg-btn').forEach((b) => {
+    // tema (8 opções: Discórdia, NVIDIA, AMD, Intel — claro/escuro)
+    const themePicker = container.querySelector('#theme-picker');
+    if (themePicker) {
+      for (const t of THEMES) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'theme-opt' + (t.id === prefs.theme ? ' active' : '');
+        b.title = t.label;
+        b.innerHTML = `<span class="theme-swatch" style="background:linear-gradient(135deg, ${t.a}, ${t.b})"></span><span class="theme-label">${escapeHtml(t.label)}</span>`;
         b.addEventListener('click', () => {
-          const t = (b.getAttribute('data-theme') as Theme) || 'dark';
-          setTheme(t);
+          setTheme(t.id);
           prefs = getPrefs();
-          markTheme(t);
-          toast(t === 'dark' ? 'Tema escuro' : 'Tema claro');
+          themePicker.querySelectorAll('.theme-opt').forEach((x) => x.classList.toggle('active', x === b));
+          toast(`Tema: ${t.label}`);
         });
-      });
+        themePicker.append(b);
+      }
     }
 
     // codec de vídeo
