@@ -2,7 +2,6 @@ import { firebaseMissing, firebaseReady } from '../lib/firebase';
 import { isValidRoomId, newPeerId, normalizeRoomId, randomId } from '../lib/config';
 import { countMembers, readRoomMeta, writeRoomMeta } from '../lib/presence';
 import {
-  EMOJI_CATEGORIES,
   PRESET_COLORS,
   addRoom,
   clearRooms,
@@ -12,6 +11,7 @@ import {
   patchPrefs,
   removeRoom,
 } from '../lib/storage';
+import { searchEmojis } from '../lib/emojiNames';
 import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
 import { setTheme } from '../lib/theme';
@@ -117,7 +117,16 @@ export function renderUser(container: HTMLElement): void {
                 </div>
                 <div class="setting setting-emoji">
                   <span class="setting-label">Seu emoji</span>
+                  <input id="emoji-search" class="emoji-search" type="search" placeholder="Buscar emoji (ex.: coração, gato, fogo)…" autocomplete="off" />
                   <div class="emoji-wrap"><div class="emoji-grid" id="emoji-grid"></div></div>
+                </div>
+                <div class="setting">
+                  <span class="setting-label">Filtro de linguagem</span>
+                  <label class="switch" for="filter-offensive">
+                    <input type="checkbox" id="filter-offensive" ${prefs.filterOffensive ? 'checked' : ''}>
+                    Censurar ofensas e racismo
+                  </label>
+                  <p class="hint">Aplica no envio e na exibição das mensagens.</p>
                 </div>
               </div>
             </div>
@@ -316,30 +325,51 @@ export function renderUser(container: HTMLElement): void {
       });
     }
 
-    // emojis
+    // emojis (com busca)
     const grid = container.querySelector('#emoji-grid');
+    const search = container.querySelector<HTMLInputElement>('#emoji-search');
     if (grid) {
-      EMOJI_CATEGORIES.forEach((cat) => {
-        const head = document.createElement('div');
-        head.className = 'emoji-cat-head';
-        head.textContent = cat.label;
-        grid.append(head);
-        cat.emojis.forEach((e) => {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'emoji-btn' + (e === prefs.emoji ? ' active' : '');
-          b.textContent = e;
-          b.title = `${cat.label} · ${e}`;
-          b.addEventListener('click', () => {
-            prefs = patchPrefs({ emoji: e });
-            grid.querySelectorAll('.emoji-btn').forEach((x) => x.classList.toggle('active', x === b));
-            refreshChip();
-            toast(`Emoji: ${e}`);
+      const renderEmojiGrid = (query: string): void => {
+        grid.innerHTML = '';
+        const results = searchEmojis(query);
+        if (!results.length) {
+          const empty = document.createElement('div');
+          empty.className = 'emoji-empty';
+          empty.textContent = 'Nenhum emoji encontrado.';
+          grid.append(empty);
+          return;
+        }
+        for (const cat of results) {
+          const head = document.createElement('div');
+          head.className = 'emoji-cat-head';
+          head.textContent = cat.label;
+          grid.append(head);
+          cat.emojis.forEach((e) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'emoji-btn' + (e === prefs.emoji ? ' active' : '');
+            b.textContent = e;
+            b.title = `${cat.label} · ${e}`;
+            b.addEventListener('click', () => {
+              prefs = patchPrefs({ emoji: e });
+              grid.querySelectorAll('.emoji-btn').forEach((x) => x.classList.toggle('active', x === b));
+              refreshChip();
+              toast(`Emoji: ${e}`);
+            });
+            grid.append(b);
           });
-          grid.append(b);
-        });
-      });
+        }
+      };
+      renderEmojiGrid('');
+      search?.addEventListener('input', () => renderEmojiGrid(search.value));
     }
+
+    // filtro de linguagem
+    const filterOff = container.querySelector<HTMLInputElement>('#filter-offensive');
+    filterOff?.addEventListener('change', () => {
+      prefs = patchPrefs({ filterOffensive: filterOff.checked });
+      toast(filterOff.checked ? 'Filtro de linguagem ativado' : 'Filtro de linguagem desativado');
+    });
 
     const refreshSwatches = (): void => {
       container.querySelectorAll('.color-swatch').forEach((s) => {

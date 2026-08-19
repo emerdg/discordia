@@ -181,6 +181,7 @@ const DEFAULT_PREFS: UserPrefs = {
   pcAudio: false,
   theme: 'dark',
   codec: 'vp8',
+  filterOffensive: true,
 };
 
 export function getPrefs(): UserPrefs {

@@ -5,6 +5,7 @@ import { addRoom, getPrefs, getRoomHistory, patchPrefs } from '../lib/storage';
 import { appendMessages, loadBefore, loadRecent, nextSeq } from '../lib/idb';
 import { Mesh } from '../web/mesh';
 import { startCapture, stopStream } from '../web/media';
+import { censorText } from '../lib/words';
 import { escapeHtml, toast, withTimeout } from '../util/dom';
 import { icon, logoMark } from '../icons';
 import type { ChatMessage, MemberInfo, UserPrefs } from '../types';
@@ -64,6 +65,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   let offMeta: (() => void) | null = null;
   let offHub: (() => void) | null = null;
   let hubOnline = true;
+  let lastChatAt = 0;
 
   // ------------------------------------------------------------------ layout
 
@@ -409,6 +411,37 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   // -------------------------------------------------------------- chat
 
+  /** Texto exibido para a mensagem (aplica o filtro se ativo). */
+  const displayText = (m: ChatMessage): string =>
+    prefs.filterOffensive ? censorText(m.text) : m.text;
+
+  /** Insere texto com links http(s) clicáveis. */
+  const appendLinked = (node: HTMLElement, text: string): void => {
+    const re = /https?:\/\/[^\s<>"')\]]+/gi;
+    let found = false;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      found = true;
+      if (last < m.index) node.appendChild(document.createTextNode(text.slice(last, m.index)));
+      let url = m[0];
+      const trail = url.match(/[.,;:!?]+$/);
+      if (trail) url = url.slice(0, -trail[0].length);
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = url;
+      node.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (!found) {
+      node.textContent = text;
+    } else if (last < text.length) {
+      node.appendChild(document.createTextNode(text.slice(last)));
+    }
+  };
+
   const buildMsg = (m: ChatMessage): HTMLElement => {
     const div = document.createElement('div');
     div.className = 'chat-msg';
@@ -418,7 +451,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     who.textContent = `${m.emoji} ${m.name}`;
     const text = document.createElement('span');
     text.className = 'text';
-    text.textContent = m.text;
+    appendLinked(text, displayText(m));
     div.append(who, document.createTextNode(' : '), text);
     return div;
   };
@@ -438,7 +471,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     seenChat.add(m.id);
     appendChatNode(m);
     if (prefs.historyLimit > 0) {
-      void appendMessages(roomId, [{ ...m, roomId, seq: nextSeq(roomId) }]);
+      const persisted = prefs.filterOffensive ? { ...m, text: censorText(m.text) } : m;
+      void appendMessages(roomId, [{ ...persisted, roomId, seq: nextSeq(roomId) }]);
     }
   };
 
@@ -653,9 +687,19 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   ui.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const text = ui.chatInput.value.trim();
+    const SPAM_MS = 10_000;
+    const now = Date.now();
+    const wait = SPAM_MS - (now - lastChatAt);
+    if (wait > 0) {
+      toast(`Aguarde ${Math.ceil(wait / 1000)}s para enviar outra mensagem.`);
+      return;
+    }
+    let text = ui.chatInput.value.trim();
     if (!text) return;
+    if (prefs.filterOffensive) text = censorText(text);
+    if (!text.trim()) return;
     mesh.sendChat(text);
+    lastChatAt = Date.now();
     ui.chatInput.value = '';
     ui.chatInput.focus();
   });

@@ -864,6 +864,18 @@ select {
   grid-column: 1 / -1;
 }
 
+.emoji-search {
+  width: 100%;
+}
+
+.emoji-empty {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: var(--text-3);
+  text-align: center;
+  padding: 12px 0;
+}
+
 .emoji-wrap {
   max-height: 340px;
   overflow: auto;
@@ -1190,6 +1202,12 @@ select {
 
 .chat-msg .text {
   color: var(--text-1);
+}
+
+.chat-msg .text a {
+  color: var(--a-1);
+  text-decoration: underline;
+  word-break: break-all;
 }
 
 .chat-more {

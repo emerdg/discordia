@@ -15,6 +15,7 @@ export interface UserPrefs {
   pcAudio: boolean;
   theme: Theme;
   codec: CodecPref;
+  filterOffensive: boolean;
 }
 
 export interface RecentRoom {

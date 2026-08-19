@@ -70,6 +70,14 @@ o evento de *Encoder* do fluxo da sala.
 O chat fica salvo localmente: ao reentrar na sala, carregam as **últimas 5
 mensagens** e um botão **"ver mais"** busca as mais antigas.
 
+### Recursos do chat
+
+- **Pesquisa de emojis** no seletor (busca por categoria ou nome, ex.: "gato").
+- **Filtro de linguagem** (padrão ativado): censura ofensas e racismo no envio e
+  na exibição — pode ser desativado em Configurações.
+- **Filtro de spam**: no máximo 1 mensagem a cada 10 segundos.
+- **Links clicáveis**: `http(s)://...` aparecem como links no chat.
+
 ## Como usar
 
 1. Abra `https://mostrapraeu.web.app` (ou rode localmente, abaixo).
