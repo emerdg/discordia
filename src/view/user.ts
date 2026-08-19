@@ -15,7 +15,7 @@ import {
 import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
 import { setTheme } from '../lib/theme';
-import type { ChatHistoryLimit, ChatSide, Theme } from '../types';
+import type { ChatHistoryLimit, ChatSide, CodecPref, Theme } from '../types';
 
 export function renderUser(container: HTMLElement): void {
   let prefs = getPrefs();
@@ -83,6 +83,14 @@ export function renderUser(container: HTMLElement): void {
                     <button data-theme="dark" class="seg-btn">${icon('moon', 15)} Escuro</button>
                     <button data-theme="light" class="seg-btn">${icon('sun', 15)} Claro</button>
                   </div>
+                </div>
+                <div class="setting">
+                  <span class="setting-label">Codec de vídeo (ao transmitir)</span>
+                  <div class="seg" id="codec-seg">
+                    <button data-codec="vp8" class="seg-btn">VP8 · Universal</button>
+                    <button data-codec="h264" class="seg-btn">H.264 · Hardware</button>
+                  </div>
+                  <p class="hint">VP8 é o mais compatível entre navegadores e sistemas. H.264 usa aceleração de hardware (NVENC / Quick Sync / VCN) quando disponível.</p>
                 </div>
                 <div class="setting">
                   <span class="setting-label">Lado do chat na sala</span>
@@ -230,6 +238,25 @@ export function renderUser(container: HTMLElement): void {
           prefs = getPrefs();
           markTheme(t);
           toast(t === 'dark' ? 'Tema escuro' : 'Tema claro');
+        });
+      });
+    }
+
+    // codec de vídeo
+    const codecSeg = container.querySelector('#codec-seg');
+    if (codecSeg) {
+      const markCodec = (c: CodecPref): void => {
+        codecSeg.querySelectorAll('.seg-btn').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-codec') === c);
+        });
+      };
+      markCodec(prefs.codec);
+      codecSeg.querySelectorAll('.seg-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          const c = (b.getAttribute('data-codec') as CodecPref) || 'vp8';
+          prefs = patchPrefs({ codec: c });
+          markCodec(c);
+          toast(c === 'h264' ? 'Codec: H.264 (hardware)' : 'Codec: VP8 (universal)');
         });
       });
     }

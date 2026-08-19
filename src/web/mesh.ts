@@ -3,7 +3,7 @@ import { joinPresence, leavePresence, setSharing, watchMembers } from '../lib/pr
 import { decodeWire, encodeWire, type Wire } from '../lib/protocol';
 import { withTimeout } from '../util/dom';
 import { encodingsFor, iceConfig, preferredVideoCodecs } from './media';
-import type { ChatMessage, MemberInfo, Resolution } from '../types';
+import type { ChatMessage, CodecPref, MemberInfo, Resolution } from '../types';
 
 export interface MeshEvents {
   onRoster(members: MemberInfo[]): void;
@@ -93,6 +93,7 @@ export class Mesh {
   private roomMaxUsers = 0;
   private localStream: MediaStream | null = null;
   private resolution: Resolution = '720p';
+  private codecPref: CodecPref = 'vp8';
   private msgSeq = 0;
   private infoRequested = false;
   private stopped = false;
@@ -129,6 +130,51 @@ export class Mesh {
   /** Resolução usada ao enviar a própria transmissão. */
   setResolution(res: Resolution): void {
     this.resolution = res;
+  }
+
+  /** Preferência de codec ao enviar a própria transmissão. */
+  setCodecPref(pref: CodecPref): void {
+    this.codecPref = pref;
+  }
+
+  /** Diagnóstico das conexões de mídia (codecs negociados, estado). */
+  mediaDiagnostics(): { peer: string; role: 'out' | 'in'; state: string; codecs: string }[] {
+    const result: { peer: string; role: 'out' | 'in'; state: string; codecs: string }[] = [];
+    const collect = (role: 'out' | 'in', peerId: string, pc: RTCPeerConnection): void => {
+      try {
+        const rows: string[] = [];
+        for (const tr of pc.getTransceivers()) {
+          const isVideo = tr.receiver?.track?.kind === 'video' || tr.sender?.track?.kind === 'video';
+          if (!isVideo) continue;
+          const codecs =
+            role === 'in'
+              ? tr.sender?.getParameters().codecs
+              : tr.receiver?.getParameters().codecs;
+          const seen = new Set<string>();
+          const names: string[] = [];
+          for (const c of codecs ?? []) {
+            if (!c.mimeType || ['video/rtx', 'video/red', 'video/ulpfec', 'video/flexfec'].includes(c.mimeType)) continue;
+            const short = c.mimeType.split('/')[1] || c.mimeType;
+            if (seen.has(short)) continue;
+            seen.add(short);
+            names.push(short);
+            if (names.length >= 2) break;
+          }
+          rows.push(`${names.join('+') || '-'}@${tr.currentDirection ?? '-'}`);
+        }
+        result.push({
+          peer: peerId,
+          role,
+          state: pc.connectionState,
+          codecs: rows.join(' | ') || '-',
+        });
+      } catch {
+        /* transceiver pode estar em estado intermediário */
+      }
+    };
+    this.mediaOut.forEach((pc, peerId) => collect('out', peerId, pc));
+    this.mediaIn.forEach((pc, peerId) => collect('in', peerId, pc));
+    return result;
   }
 
   // ----------------------------------------------------------------- join
@@ -457,6 +503,7 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
       if (e.candidate) void sendIce(this.roomId, this.myId, peerId, 'media', candidateInit(e.candidate));
     };
     pc.onconnectionstatechange = () => {
+      console.debug(`[mesh] mediaOut ${peerId} → ${pc.connectionState}`);
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.teardownWatch(peerId);
     };
     pc.oniceconnectionstatechange = () => {
@@ -553,6 +600,7 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (c) => addIceBuffered(pc, c, iceBuf));
 
     pc.onconnectionstatechange = () => {
+      console.debug(`[mesh] mediaIn ${peerId} → ${pc.connectionState}`);
       if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
         unsubIce();
         try {
@@ -568,14 +616,15 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     try {
       await pc.setRemoteDescription(offer);
       await flushIce(pc, iceBuf);
+      const pref = preferredVideoCodecs(this.codecPref);
       for (const tr of pc.getTransceivers()) {
         if (!tr.sender?.track) continue;
         tr.direction = 'sendonly';
         if (tr.sender.track.kind === 'video') {
           try {
-            tr.setCodecPreferences(preferredVideoCodecs());
+            tr.setCodecPreferences(pref);
           } catch {
-            /* noop */
+            /* navegador sem suporte — usa a ordem padrão */
           }
         }
       }

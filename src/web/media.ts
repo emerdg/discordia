@@ -1,5 +1,5 @@
 import { CONFIG } from '../lib/config';
-import type { Resolution } from '../types';
+import type { CodecPref, Resolution } from '../types';
 
 export interface CapturePrefs {
   resolution: Resolution;
@@ -89,33 +89,20 @@ export function maxBitrate(resolution: Resolution): number {
 }
 
 /** Fator de redução para não enviar mais resolução que o selecionado. */
-export function scaleDownFor(track: MediaStreamTrack, resolution: Resolution): number {
-  const settings = track.getSettings?.() ?? {};
-  const srcW = settings.width || 1920;
-  const srcH = settings.height || 1080;
-  const { width: targetW, height: targetH } = targetDimensions(resolution);
-  const srcMax = Math.max(srcW, srcH);
-  const targetMax = Math.max(targetW, targetH);
-  if (srcMax <= targetMax) return 1;
-  const factor = srcMax / targetMax;
-  return Math.min(factor, 4);
-}
+/** NOTA: scaleResolutionDownBy foi removido por compatibilidade entre navegadores. */
 
-/** Parâmetros de codificação para a resolução escolhida. */
+/** Parâmetros de codificação para a resolução escolhida (apenas bitrate). */
 export function encodingsFor(track: MediaStreamTrack, resolution: Resolution): RTCRtpEncodingParameters[] {
-  return [
-    {
-      maxBitrate: maxBitrate(resolution),
-      scaleResolutionDownBy: scaleDownFor(track, resolution),
-    },
-  ];
+  void track;
+  return [{ maxBitrate: maxBitrate(resolution) }];
 }
 
 /**
- * Prefere codecs com encoder de hardware. Em navegadores baseados em Chromium
- * o H.264 e o VP9 costumam ser acelerados por GPU (NVENC/Quick Sync/VCN).
+ * Ordem de codecs preferida, de acordo com a configuração do usuário.
+ * - 'vp8': VP8 primeiro (o mais universal entre Chrome/Edge/Firefox/Safari).
+ * - 'h264': H.264 primeiro (permite aceleração de hardware NVENC/Quick Sync/VCN).
  */
-export function preferredVideoCodecs(): RTCRtpCodec[] {
+export function preferredVideoCodecs(pref: CodecPref): RTCRtpCodec[] {
   const caps = typeof RTCRtpSender !== 'undefined' ? RTCRtpSender.getCapabilities?.('video') : null;
   if (!caps?.codecs) return [];
   const usable = caps.codecs.filter(
@@ -126,11 +113,11 @@ export function preferredVideoCodecs(): RTCRtpCodec[] {
       c.mimeType !== 'video/flexfec',
   );
   const rank = (mime: string): number => {
-    if (mime === 'video/H264') return 0;
-    if (mime === 'video/VP9') return 1;
-    if (mime === 'video/AV1') return 2;
-    if (mime === 'video/VP8') return 3;
-    return 4;
+    if (mime === 'video/VP8') return pref === 'vp8' ? 0 : 3;
+    if (mime === 'video/H264') return pref === 'h264' ? 0 : 1;
+    if (mime === 'video/VP9') return 2;
+    if (mime === 'video/AV1') return 4;
+    return 5;
   };
   return usable.sort((a, b) => rank(a.mimeType) - rank(b.mimeType)).slice(0, 6);
 }

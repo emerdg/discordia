@@ -2,6 +2,7 @@ export type Resolution = '1080p' | '720p' | '480p';
 export type ChatSide = 'left' | 'right';
 export type ChatHistoryLimit = 0 | 25 | 50 | 100;
 export type Theme = 'dark' | 'light';
+export type CodecPref = 'vp8' | 'h264';
 
 export interface UserPrefs {
   name: string;
@@ -13,6 +14,7 @@ export interface UserPrefs {
   mic: boolean;
   pcAudio: boolean;
   theme: Theme;
+  codec: CodecPref;
 }
 
 export interface RecentRoom {

@@ -180,6 +180,7 @@ const DEFAULT_PREFS: UserPrefs = {
   mic: false,
   pcAudio: false,
   theme: 'dark',
+  codec: 'vp8',
 };
 
 export function getPrefs(): UserPrefs {

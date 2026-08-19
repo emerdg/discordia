@@ -522,6 +522,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     },
   });
 
+  mesh.setCodecPref(prefs.codec);
+
   const mediaWatchers = new Set<string>();
 
   const copyId = (): void => {
@@ -570,13 +572,20 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       members
         .map((m) => (m.peerId === s.peerId ? `${m.emoji}${m.name} (eu)` : `${m.emoji}${m.name}${m.sharing ? ' 🔴' : ''}`))
         .join(', ') || '(nenhum)';
-    dbgEl.textContent = [
+    const codecLabel = prefs.codec === 'h264' ? 'H.264 (hardware)' : 'VP8 (universal)';
+    const lines = [
       `Hub: ${hubOnline ? 'online ✅' : 'offline ⛔'}`,
       `Sala: ${roomId}   |   Seu peer: ${s.peerId}`,
       `Participantes no banco: ${s.members} → ${names}`,
       `Canais de dados abertos: ${s.links}/${s.linksTotal}`,
       `Assistindo: ${s.watching}   |   Assistindo você: ${s.watchedBy}`,
-    ].join('\n');
+      `Codec (envio): ${codecLabel}`,
+    ];
+    for (const m of mesh.mediaDiagnostics()) {
+      const arrow = m.role === 'in' ? '← você transmite para' : '→ você assiste';
+      lines.push(`Mídia ${arrow} ${m.peer}: ${m.codecs} [${m.state}]`);
+    }
+    dbgEl.textContent = lines.join('\n');
   };
   ui.root.querySelector('#btn-dbg')?.addEventListener('click', () => {
     dbgOn = !dbgOn;

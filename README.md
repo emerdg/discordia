@@ -97,11 +97,20 @@ Para testar em duas janelas: abra `http://localhost:5173` em duas abas
 
 ```bash
 npm run build
+npm run build:testes        # build paralelo para https://.../testes (preview)
 npx firebase deploy          # hosting + database rules
 ```
 
 As regras do Realtime Database estão em `database.rules.json` (acesso somente
 ao caminho `/rooms`; o restante do banco é bloqueado).
+
+## Compatibilidade entre navegadores
+
+O vídeo usa WebRTC P2P. Por padrão o app negocia **VP8** (o codec mais
+universal entre Chrome/Edge/Firefox/Safari e sistemas). Quem quiser priorizar
+aceleração de hardware (NVENC/Quick Sync/VCN) pode trocar em **Configurações →
+Codec de vídeo → H.264 · Hardware**. Nas configurações o painel **🛠** mostra o
+codec negociado e o estado da conexão de mídia.
 
 ## Configuração (variáveis de ambiente)
 
