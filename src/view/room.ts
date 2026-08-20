@@ -1,6 +1,14 @@
-import { firebaseReady, ensureAuthed } from '../lib/firebase';
+import { firebaseReady, ensureAuthed, getAuthUid } from '../lib/firebase';
 import { isValidRoomId, APP_VERSION } from '../lib/config';
-import { countMembers, readRoomMeta, watchHubConnection, watchRoomMeta } from '../lib/presence';
+import {
+  countMembers,
+  eligibleModerators,
+  normalizeRoomMeta,
+  readRoomMeta,
+  updateRoomMeta,
+  watchHubConnection,
+  watchRoomMeta,
+} from '../lib/presence';
 import { addRoom, getPrefs, getRoomHistory, patchPrefs } from '../lib/storage';
 import { appendMessages, loadBefore, loadRecent, nextSeq } from '../lib/idb';
 import { Mesh } from '../web/mesh';
@@ -8,7 +16,7 @@ import { startCapture, stopStream } from '../web/media';
 import { censorText } from '../lib/words';
 import { escapeHtml, toast, withTimeout } from '../util/dom';
 import { icon, logoMark } from '../icons';
-import type { ChatMessage, MemberInfo, Resolution, UserPrefs } from '../types';
+import type { BroadcastPolicy, ChatMessage, MemberInfo, Resolution, RoomMeta, UserPrefs } from '../types';
 
 interface StageTile {
   key: string;
@@ -74,6 +82,19 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   let offHub: (() => void) | null = null;
   let hubOnline = true;
   let lastChatAt = 0;
+  let uid: string | null = getAuthUid();
+  let roomMeta: RoomMeta | null = null;
+  let awaitingApproval = false;
+  let approvalTimer: number | null = null;
+  const pendingRequests = new Set<string>();
+
+  const isCreator = (): boolean => Boolean(uid && roomMeta && roomMeta.hostId === uid);
+  const isModerator = (): boolean => isCreator() || Boolean(uid && roomMeta?.moderators?.includes(uid));
+  const roomPolicy = (): BroadcastPolicy => roomMeta?.broadcastPolicy ?? 'everyone';
+  const roomCensorship = (): boolean => roomMeta?.censorship !== false;
+  const effectiveFilter = (): boolean => roomCensorship() || prefs.filterOffensive;
+  const hasApproverPresent = (): boolean =>
+    members.some((m) => roomMeta && (m.owner === roomMeta.hostId || roomMeta.moderators?.includes(m.owner as string)));
 
   // ------------------------------------------------------------------ layout
 
@@ -88,6 +109,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           </span>
           <span class="rr-actions">
             <button id="btn-copy-id" class="icon-btn" title="Copiar ID da sala">${icon('copy', 17)}</button>
+            <button id="btn-room-settings" class="icon-btn" title="Configurações da sala" hidden>${icon('settings', 17)}</button>
             <button id="btn-fs" class="icon-btn" title="Tela cheia">${icon('fullscreen', 17)}</button>
             <button id="btn-dbg" class="icon-btn" title="Diagnóstico" hidden>${icon('diag', 17)}</button>
             <button id="btn-leave" class="danger">${icon('leave', 16)} Sair</button>
@@ -152,6 +174,18 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           </div>
         </main>
       </div>
+
+      <div id="room-settings-modal" class="modal-mask" hidden>
+        <div class="modal-card">
+          <header class="modal-head">
+            <span class="sec-title">Configurações da sala</span>
+            <button id="settings-close" class="icon-btn" title="Fechar">${icon('x', 17)}</button>
+          </header>
+          <div id="settings-body" class="modal-body"></div>
+        </div>
+      </div>
+
+      <div id="pending-panel" class="pending-panel" hidden></div>
     </div>
   `;
 
@@ -363,6 +397,45 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       chip.style.setProperty('--chip-color', m.color);
       chip.dataset.peerId = m.peerId;
       chip.innerHTML = `<span class="rc-emoji">${escapeHtml(m.emoji)}</span><span class="rc-name">${escapeHtml(m.name)}</span>`;
+      // badge de criador/moderador
+      if (roomMeta && m.owner) {
+        if (m.owner === roomMeta.hostId) {
+          const b = document.createElement('span');
+          b.className = 'rc-badge rc-badge-creator';
+          b.title = 'Criador da sala';
+          b.textContent = '👑';
+          chip.append(b);
+        } else if (roomMeta.moderators?.includes(m.owner)) {
+          const b = document.createElement('span');
+          b.className = 'rc-badge rc-badge-mod';
+          b.title = 'Moderador';
+          b.textContent = '🛡';
+          chip.append(b);
+        }
+      }
+      if (m.sharing && (isCreator() || isModerator()) && m.peerId !== mesh.peerId) {
+        const stop = document.createElement('span');
+        stop.className = 'rc-stop';
+        stop.title = 'Encerrar transmissão';
+        stop.innerHTML = icon('broadcastStop', 14);
+        stop.addEventListener('click', (e) => {
+          e.stopPropagation();
+          mesh.cancelTransmit(m.peerId);
+          toast(`Transmissão de ${m.name} encerrada.`);
+        });
+        chip.append(stop);
+      }
+      if (roomPolicy() === 'creator_approves' && isCreator() && m.peerId !== mesh.peerId) {
+        const request = document.createElement('span');
+        request.className = 'rc-approve';
+        request.title = 'Aprovar/negar transmissão deste participante';
+        request.innerHTML = icon('approve', 14);
+        request.addEventListener('click', (e) => {
+          e.stopPropagation();
+          renderPendingPanel();
+        });
+        chip.append(request);
+      }
       if (m.sharing) {
         const live = document.createElement('span');
         live.className = 'live-dot';
@@ -473,7 +546,48 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     ui.btnTransmit.classList.toggle('btn-primary', !on);
   };
 
-  const startTx = async (): Promise<void> => {
+  /** Aplica a política de transmissão à UI do botão (habilita/desabilita). */
+  const applyPolicyUi = (): void => {
+    const restricted = roomPolicy() === 'creator_only' && !isCreator();
+    ui.btnTransmit.disabled = restricted;
+    ui.btnTransmit.title = restricted
+      ? 'Somente o criador pode iniciar transmissão nesta sala'
+      : 'Iniciar transmissão';
+  };
+
+  const resetAwaiting = (): void => {
+    if (approvalTimer != null) {
+      clearTimeout(approvalTimer);
+      approvalTimer = null;
+    }
+    awaitingApproval = false;
+    setTransmitBtn(false);
+    ui.btnTransmit.disabled = false;
+    applyPolicyUi();
+  };
+
+  /** Pede aprovação a um criador/moderador (política "criador aprova"). */
+  const requestApproval = (): void => {
+    if (awaitingApproval || isCreator()) return;
+    if (roomPolicy() !== 'creator_approves') return;
+    if (!hasApproverPresent()) {
+      setStatus('Sem criador/moderador presente — transmissão negada.');
+      toast('Ninguém autorizado na sala para aprovar a transmissão.');
+      return;
+    }
+    awaitingApproval = true;
+    ui.btnTransmit.innerHTML = icon('broadcast', 17) + ' <span>Aguardando aprovação…</span>';
+    ui.btnTransmit.disabled = true;
+    ui.btnTransmit.classList.remove('danger');
+    setStatus('Aguardando aprovação de um criador/moderador…');
+    mesh.requestTransmit();
+    approvalTimer = window.setTimeout(() => {
+      resetAwaiting();
+      toast('Pedido de transmissão não respondido a tempo. Tente de novo.');
+    }, 30_000);
+  };
+
+  const beginCapture = async (): Promise<void> => {
     if (transmitting) return;
     const resolution = ui.txRes.value as UserPrefs['resolution'];
     const capture = {
@@ -500,6 +614,19 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     ui.selfPreview.classList.add('on');
     setStatus('Transmitindo. Clique em você ou em outros para ver.');
     renderRoster(members);
+  };
+
+  const startTx = async (): Promise<void> => {
+    if (transmitting) return;
+    if (roomPolicy() === 'creator_only' && !isCreator()) {
+      toast('Somente o criador pode iniciar uma transmissão nesta sala.');
+      return;
+    }
+    if (roomPolicy() === 'creator_approves' && !isCreator()) {
+      requestApproval();
+      return;
+    }
+    await beginCapture();
   };
 
   const stopTx = async (): Promise<void> => {
@@ -567,9 +694,9 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     sendCooldownTimer = window.setTimeout(() => clearSendCooldown(), waitMs);
   };
 
-  /** Texto exibido para a mensagem (aplica o filtro se ativo). */
+  /** Texto exibido para a mensagem (aplica o filtro se efetivo na sala/perfil). */
   const displayText = (m: ChatMessage): string =>
-    prefs.filterOffensive ? censorText(m.text) : m.text;
+    effectiveFilter() ? censorText(m.text) : m.text;
 
   /** Insere texto com links http(s) clicáveis. */
   const appendLinked = (node: HTMLElement, text: string): void => {
@@ -627,7 +754,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     seenChat.add(m.id);
     appendChatNode(m);
     if (prefs.historyLimit > 0) {
-      const persisted = prefs.filterOffensive ? { ...m, text: censorText(m.text) } : m;
+      const persisted = effectiveFilter() ? { ...m, text: censorText(m.text) } : m;
       void appendMessages(roomId, [{ ...persisted, roomId, seq: nextSeq(roomId) }]);
     }
   };
@@ -691,6 +818,31 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       if (tiles.has('self') && !transmitting) removeTileEl('self');
     },
     onChat,
+    onTxRequest: (peerId) => {
+      if (roomPolicy() !== 'creator_approves' || (!isCreator() && !isModerator())) return;
+      const m = members.find((x) => x.peerId === peerId);
+      if (!m || m.peerId === mesh.peerId) return;
+      pendingRequests.add(peerId);
+      renderPendingPanel();
+      setStatus(`${m.name} pediu para transmitir.`);
+      renderRoster(members);
+    },
+    onTxApproved: () => {
+      if (!awaitingApproval) return;
+      resetAwaiting();
+      void beginCapture();
+    },
+    onTxDenied: () => {
+      if (!awaitingApproval) return;
+      resetAwaiting();
+      toast('Pedido de transmissão negado por um moderador.');
+    },
+    onTxCancelled: () => {
+      if (awaitingApproval) resetAwaiting();
+      if (transmitting) {
+        void stopTx().then(() => toast('Sua transmissão foi encerrada por um moderador.'));
+      }
+    },
     onRoomInfo: (info) => updateRoomName(info.name),
     onRemoteWatch: (peerId, started) => {
       watchers.set(peerId, started);
@@ -714,6 +866,187 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   mesh.setCodecPref(prefs.codec);
 
   const mediaWatchers = new Set<string>();
+
+  // ----------------------------------------------- moderação (aprovações)
+
+  const pendingEl = (): HTMLElement | null => container.querySelector<HTMLElement>('#pending-panel');
+
+  const renderPendingPanel = (): void => {
+    const panel = pendingEl();
+    if (!panel) return;
+    for (const peerId of [...pendingRequests]) {
+      if (!members.some((m) => m.peerId === peerId)) pendingRequests.delete(peerId);
+    }
+    panel.innerHTML = '';
+    if (pendingRequests.size === 0) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const title = document.createElement('div');
+    title.className = 'pending-title';
+    title.textContent = 'Aprovar transmissão';
+    panel.append(title);
+    for (const peerId of pendingRequests) {
+      const m = members.find((x) => x.peerId === peerId);
+      if (!m) continue;
+      const row = document.createElement('div');
+      row.className = 'pending-row';
+      row.innerHTML = `<span class="rc-emoji">${escapeHtml(m.emoji)}</span><span class="rc-name">${escapeHtml(m.name)}</span>`;
+      const ok = document.createElement('button');
+      ok.className = 'seg-btn pending-ok';
+      ok.title = 'Aprovar';
+      ok.innerHTML = icon('approve', 14);
+      ok.addEventListener('click', () => {
+        mesh.approveTransmit(peerId);
+        pendingRequests.delete(peerId);
+        toast(`Transmissão de ${m.name} aprovada.`);
+        renderPendingPanel();
+        renderRoster(members);
+      });
+      const no = document.createElement('button');
+      no.className = 'seg-btn pending-no';
+      no.title = 'Negar';
+      no.innerHTML = icon('deny', 14);
+      no.addEventListener('click', () => {
+        mesh.denyTransmit(peerId);
+        pendingRequests.delete(peerId);
+        toast(`Pedido de ${m.name} negado.`);
+        renderPendingPanel();
+        renderRoster(members);
+      });
+      row.append(ok, no);
+      panel.append(row);
+    }
+  };
+
+  // ----------------------------------------------------- configurações da sala
+
+  const settingsBtn = container.querySelector<HTMLButtonElement>('#btn-room-settings');
+  const settingsModal = container.querySelector<HTMLElement>('#room-settings-modal');
+  const settingsClose = container.querySelector<HTMLElement>('#settings-close');
+
+  const applySettingsToggle = (): void => {
+    if (settingsBtn) settingsBtn.hidden = !isCreator();
+  };
+
+  const renderSettingsBody = (): void => {
+    const body = container.querySelector<HTMLElement>('#settings-body');
+    const meta = roomMeta;
+    if (!body || !meta) return;
+    const isOn = roomCensorship();
+
+    body.innerHTML = `
+      <label class="field-label" for="set-max">Limite de participantes</label>
+      <select id="set-max"></select>
+      <p id="set-max-warn" class="warn hidden">Limite menor que o número atual de participantes (${members.length}).</p>
+      <div class="setting room-create-setting">
+        <span class="setting-label">Filtro de linguagem na sala</span>
+        <label class="switch" for="set-censor">
+          <input type="checkbox" id="set-censor" ${isOn ? 'checked' : ''}>
+          <span>Censurar ofensas e racismo para todos</span>
+        </label>
+        <p class="hint">Se ativado, vale para todos. Se desativado, vale apenas para quem tem o filtro no perfil.</p>
+      </div>
+      <div class="setting room-create-setting">
+        <span class="setting-label">Quem pode iniciar transmissão</span>
+        <div class="seg" id="set-policy-seg">
+          <button data-pol="everyone" class="seg-btn">Todos</button>
+          <button data-pol="creator_only" class="seg-btn">Só o criador</button>
+          <button data-pol="creator_approves" class="seg-btn">Criador aprova</button>
+        </div>
+      </div>
+      <div class="setting room-create-setting">
+        <span class="setting-label">Moderadores</span>
+        <div id="set-mods" class="mod-list"></div>
+      </div>
+      <p class="hint">Moderadores ajudam: aprovam transmissões quando o criador está ausente e podem encerrar transmissões.</p>
+    `;
+
+    const maxSel = body.querySelector<HTMLSelectElement>('#set-max');
+    if (maxSel) {
+      for (let n = 2; n <= 10; n++) {
+        const opt = document.createElement('option');
+        opt.value = String(n);
+        opt.textContent = `${n} ${n === 1 ? 'pessoa' : 'pessoas'}`;
+        maxSel.append(opt);
+      }
+      maxSel.value = String(meta.maxUsers);
+      const warn = body.querySelector('#set-max-warn');
+      const syncWarn = (): void => {
+        if (warn) warn.classList.toggle('hidden', Number(maxSel.value) >= members.length);
+      };
+      syncWarn();
+      maxSel.addEventListener('change', () => {
+        const v = Number(maxSel.value);
+        if (v < members.length) {
+          syncWarn();
+          return;
+        }
+        syncWarn();
+        void updateRoomMeta(roomId, { maxUsers: v }).catch(() => toast('Falha ao salvar o limite.'));
+        toast(`Limite: ${v} participantes`);
+      });
+    }
+
+    const censor = body.querySelector<HTMLInputElement>('#set-censor');
+    censor?.addEventListener('change', () => {
+      void updateRoomMeta(roomId, { censorship: censor.checked }).catch(() => toast('Falha ao salvar.'));
+      toast(censor.checked ? 'Censura na sala ativada' : 'Censura na sala desativada');
+    });
+
+    const seg = body.querySelector<HTMLElement>('#set-policy-seg');
+    if (seg) {
+      const mark = (p: string): void => {
+        seg.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.getAttribute('data-pol') === p));
+      };
+      mark(meta.broadcastPolicy ?? 'everyone');
+      seg.querySelectorAll('.seg-btn').forEach((b) => {
+        b.addEventListener('click', () => {
+          const p = (b.getAttribute('data-pol') as BroadcastPolicy) || 'everyone';
+          void updateRoomMeta(roomId, { broadcastPolicy: p }).catch(() => toast('Falha ao salvar.'));
+          mark(p);
+          toast(p === 'everyone' ? 'Transmissão: todos podem' : p === 'creator_only' ? 'Transmissão: só o criador' : 'Transmissão: criador aprova');
+        });
+      });
+    }
+
+    const mods = body.querySelector<HTMLElement>('#set-mods');
+    if (mods) {
+      const named = [...(meta.moderators ?? [])];
+      const present = members.filter((m) => m.owner);
+      const listAdd = Array.from(new Map([...present.map((m) => [m.owner as string, m] as const), ...named.map((u) => [u, undefined] as const)]).entries());
+      listAdd.forEach(([ownerUid, m]) => {
+        const isMod = named.includes(ownerUid);
+        const row = document.createElement('div');
+        row.className = 'pending-row';
+        row.innerHTML = `<span class="rc-emoji">${escapeHtml(m?.emoji ?? '❔')}</span><span class="rc-name">${escapeHtml(m?.name ?? 'Membro ausente')}</span>`;
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'seg-btn' + (isMod ? ' pending-ok' : '');
+        toggle.textContent = isMod ? 'Remover' : 'Moderar';
+        toggle.title = isMod ? `Remover ${m?.name ?? 'membro'} dos moderadores` : `Tornar ${m?.name ?? 'membro'} moderador`;
+        toggle.addEventListener('click', () => {
+          const next = isMod ? named.filter((u) => u !== ownerUid) : [...new Set([...named, ownerUid])];
+          void updateRoomMeta(roomId, { moderators: next }).catch(() => toast('Falha ao salvar moderadores.'));
+        });
+        row.append(toggle);
+        mods.append(row);
+      });
+    }
+  };
+
+  settingsBtn?.addEventListener('click', () => {
+    if (!settingsModal) return;
+    renderSettingsBody();
+    settingsModal.hidden = false;
+  });
+  settingsClose?.addEventListener('click', () => {
+    if (settingsModal) settingsModal.hidden = true;
+  });
+  settingsModal?.addEventListener('click', (e) => {
+    if (e.target === settingsModal) settingsModal.hidden = true;
+  });
 
   // ----------------------------------------------------------------- events
 
@@ -921,7 +1254,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
     let text = ui.chatInput.value.trim();
     if (!text) return;
-    if (prefs.filterOffensive) text = censorText(text);
+    if (effectiveFilter()) text = censorText(text);
     if (!text.trim()) return;
     mesh.sendChat(text);
     lastChatAt = Date.now();
@@ -952,12 +1285,22 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   const doJoin = async (): Promise<void> => {
     try {
-      await ensureAuthed();
+      const myUid = await ensureAuthed();
+      uid = myUid;
+      mesh.setAuthorizedModerators([]);
       const hist = getRoomHistory(roomId);
       const meta = await withTimeout(readRoomMeta(roomId), 5000, null);
       if (meta) {
-        mesh.setRoomInfo(meta.name, meta.maxUsers);
-        updateRoomName(meta.name);
+        const room = normalizeRoomMeta(meta);
+        if (room) {
+          roomMeta = room;
+          mesh.setRoomInfo(room.name, room.maxUsers);
+          updateRoomName(room.name);
+          mesh.setAuthorizedModerators(eligibleModerators(room));
+          applyPolicyUi();
+          applySettingsToggle();
+          renderRoster(members);
+        }
       } else if (hist) {
         mesh.setRoomInfo(hist.name, 10);
         updateRoomName(hist.name);
@@ -971,7 +1314,15 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       }
 
       offMeta = watchRoomMeta(roomId, (m) => {
-        if (m) updateRoomName(m.name);
+        const next = normalizeRoomMeta(m);
+        if (!next) return;
+        roomMeta = next;
+        updateRoomName(next.name);
+        mesh.setAuthorizedModerators(eligibleModerators(next));
+        applyPolicyUi();
+        applySettingsToggle();
+        renderRoster(members);
+        if (settingsModal && !settingsModal.hidden) renderSettingsBody();
       });
       offHub = watchHubConnection((online) => {
         hubOnline = online;

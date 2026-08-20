@@ -1,6 +1,6 @@
 import { get, onDisconnect, onValue, ref, remove, set, update } from 'firebase/database';
 import { getDb } from './firebase';
-import type { MemberInfo, RoomMeta } from '../types';
+import type { BroadcastPolicy, MemberInfo, RoomMeta } from '../types';
 
 const node = {
   room: (roomId: string) => `rooms/${roomId}`,
@@ -18,6 +18,25 @@ export function watchHubConnection(cb: (online: boolean) => void): () => void {
 
 // ----------------------------------------------------------------- meta
 
+export const DEFAULT_BROADCAST_POLICY: BroadcastPolicy = 'everyone';
+
+/** Preenche os defaults dos campos novos para salas antigas. */
+export function normalizeRoomMeta(meta: RoomMeta | null): RoomMeta | null {
+  if (!meta) return null;
+  return {
+    ...meta,
+    censorship: meta.censorship !== false,
+    broadcastPolicy: meta.broadcastPolicy || DEFAULT_BROADCAST_POLICY,
+    moderators: Array.isArray(meta.moderators) ? meta.moderators.filter((u) => typeof u === 'string') : [],
+  };
+}
+
+/** UIDs que podem moderar a sala (dono + moderadores nomeados). */
+export function eligibleModerators(meta: RoomMeta | null): string[] {
+  if (!meta?.hostId) return [];
+  return [meta.hostId, ...(meta.moderators ?? [])];
+}
+
 export async function readRoomMeta(roomId: string): Promise<RoomMeta | null> {
   try {
     const snap = await get(ref(getDb(), node.meta(roomId)));
@@ -31,10 +50,19 @@ export async function writeRoomMeta(roomId: string, meta: RoomMeta): Promise<voi
   await set(ref(getDb(), node.meta(roomId)), meta);
 }
 
+/**
+ * Atualiza campos do metadado preservando o restante (lê + mescla + grava).
+ * As regras do RTDB só permitem que o próprio hostId escreva o meta.
+ */
+export async function updateRoomMeta(roomId: string, patch: Partial<RoomMeta>): Promise<void> {
+  const current = await readRoomMeta(roomId);
+  await set(ref(getDb(), node.meta(roomId)), { ...(current ?? {}), ...patch });
+}
+
 /** Observa mudanças no metadado da sala. */
 export function watchRoomMeta(roomId: string, cb: (meta: RoomMeta | null) => void): () => void {
   const r = ref(getDb(), node.meta(roomId));
-  const off = onValue(r, (snap) => cb(snap.exists() ? (snap.val() as RoomMeta) : null));
+  const off = onValue(r, (snap) => cb(snap.exists() ? normalizeRoomMeta(snap.val() as RoomMeta) : null));
   return () => off();
 }
 

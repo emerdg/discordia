@@ -25,6 +25,10 @@ export interface MeshEvents {
   onRemoteWatch(peerId: string, started: boolean): void;
   onReceiveStream(peerId: string, stream: MediaStream): void;
   onReceiveEnd(peerId: string): void;
+  onTxRequest(peerId: string): void;
+  onTxApproved(): void;
+  onTxDenied(): void;
+  onTxCancelled(): void;
 }
 
 interface PeerLink {
@@ -107,6 +111,8 @@ export class Mesh {
   private stopped = false;
   /** uid do auth anônimo (usado no escrever sinalização/presença como dono). */
   private owner = '';
+  /** UIDs (dono + moderadores) autorizados a aprovar/negar/cancelar transmissão. */
+  private authorizedUids = new Set<string>();
   /** Evita loop de reconexão imposto por um par malicioso via refresh-media. */
   private readonly refreshCooldown = new Map<string, number>();
 
@@ -224,6 +230,70 @@ export class Mesh {
 
   async setTransmitting(on: boolean): Promise<void> {
     await setSharing(this.roomId, this.myId, on);
+  }
+
+  /** Define os UIDs (dono + moderadores) autorizados a moderar a transmissão. */
+  setAuthorizedModerators(uids: string[]): void {
+    this.authorizedUids = new Set(uids.filter((u) => typeof u === 'string' && u.length > 0));
+  }
+
+  /**
+   * Valida que uma mensagem de metadado veio de um membro cujo `owner`
+   * registrado no RTDB bate com o `owner` declarado no pacote. As regras do
+   * banco garantem que `owner` do membro é o uid real de quem o escreveu —
+   * logo um invasor não consegue usar o peerId de um moderador/dono.
+   */
+  private okTx(peerId: string, owner: string | undefined, needModerator: boolean): boolean {
+    if (!owner) return false;
+    const m = this.members.get(peerId);
+    if (!m || m.owner !== owner) return false;
+    if (!needModerator) return true;
+    return this.authorizedUids.has(owner);
+  }
+
+  // ----------------------------------------- controle de transmissão (P2P)
+
+  private sendTo(peerId: string, wire: Wire): boolean {
+    const dc = this.links.get(peerId)?.dc;
+    if (!dc || dc.readyState !== 'open') return false;
+    try {
+      dc.send(encodeWire(wire));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private broadcast(wire: Wire): void {
+    for (const link of this.links.values()) {
+      if (!link.established || !link.dc) continue;
+      const dc = link.dc;
+      try {
+        dc.send(encodeWire(wire));
+      } catch {
+        /* par caiu no meio */
+      }
+    }
+  }
+
+  /** Pede ao criador/moderador autorização para iniciar transmissão. */
+  requestTransmit(): void {
+    this.broadcast({ type: 'tx-request', owner: this.owner });
+  }
+
+  /** Criador/moderador aprova o pedido de transmissão de um membro. */
+  approveTransmit(peerId: string): void {
+    this.sendTo(peerId, { type: 'tx-approve', owner: this.owner });
+  }
+
+  /** Criador/moderador nega o pedido de transmissão de um membro. */
+  denyTransmit(peerId: string): void {
+    this.sendTo(peerId, { type: 'tx-deny', owner: this.owner });
+  }
+
+  /** Criador/moderador encerra a transmissão ativa de um membro. */
+  cancelTransmit(peerId: string): void {
+    this.sendTo(peerId, { type: 'tx-cancel', owner: this.owner });
   }
 
   /**
@@ -508,6 +578,23 @@ pc.onicecandidate = (e) => {
             }
           }, 400);
         }
+        break;
+      }
+      case 'tx-request': {
+        if (fromId === this.myId) break;
+        if (this.okTx(fromId, wire.owner, false)) this.events.onTxRequest(fromId);
+        break;
+      }
+      case 'tx-approve': {
+        if (this.okTx(fromId, wire.owner, true)) this.events.onTxApproved();
+        break;
+      }
+      case 'tx-deny': {
+        if (this.okTx(fromId, wire.owner, true)) this.events.onTxDenied();
+        break;
+      }
+      case 'tx-cancel': {
+        if (this.okTx(fromId, wire.owner, true)) this.events.onTxCancelled();
         break;
       }
       default:

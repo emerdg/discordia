@@ -9,7 +9,11 @@ export type Wire =
   | { type: 'chat'; message: WireChat }
   | { type: 'unwatch' }
   | { type: 'refresh-media' }
-  | { type: 'pong'; ts: number };
+  | { type: 'pong'; ts: number }
+  | { type: 'tx-request'; owner: string }
+  | { type: 'tx-approve'; owner: string }
+  | { type: 'tx-deny'; owner: string }
+  | { type: 'tx-cancel'; owner: string };
 
 export function encodeWire(msg: Wire): string {
   return JSON.stringify(msg);

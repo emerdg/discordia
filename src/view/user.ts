@@ -16,7 +16,7 @@ import { searchEmojis } from '../lib/emojiNames';
 import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
 import { setTheme, THEMES } from '../lib/theme';
-import type { ChatHistoryLimit, ChatSide, CodecPref } from '../types';
+import type { BroadcastPolicy, ChatHistoryLimit, ChatSide, CodecPref } from '../types';
 
 export function renderUser(container: HTMLElement): void {
   let prefs = getPrefs();
@@ -45,6 +45,22 @@ export function renderUser(container: HTMLElement): void {
             <label class="field-label" for="room-max">Limite de participantes</label>
             <select id="room-max"></select>
             <p id="max-warning" class="warn hidden">Mais de 5 pessoas em malha P2P podem exigir uma banda de internet muito maior.</p>
+            <div class="setting room-create-setting">
+              <span class="setting-label">Filtro de linguagem na sala</span>
+              <label class="switch" for="room-censorship">
+                <input type="checkbox" id="room-censorship" checked>
+                <span>Censurar ofensas e racismo para todos</span>
+              </label>
+              <p class="hint">Se ativado, vale para todos. Se desativado, vale apenas para quem tem o filtro ativo no perfil.</p>
+            </div>
+            <div class="setting room-create-setting">
+              <span class="setting-label">Quem pode iniciar transmissão</span>
+              <div class="seg" id="room-broadcast-seg">
+                <button data-pol="everyone" class="seg-btn">Todos</button>
+                <button data-pol="creator_only" class="seg-btn">Só o criador</button>
+                <button data-pol="creator_approves" class="seg-btn">Criador aprova</button>
+              </div>
+            </div>
             <button id="btn-create" class="btn-primary">${icon('plus', 16)} Criar sala</button>
             <p class="hint">O ID é gerado automaticamente. Você o compartilha com os amigos.</p>
           </section>
@@ -161,6 +177,18 @@ export function renderUser(container: HTMLElement): void {
     }
 
     const createBtn = container.querySelector('#btn-create');
+    const broadcastSeg = container.querySelector<HTMLElement>('#room-broadcast-seg');
+    if (broadcastSeg) {
+      const markPol = (p: string): void => {
+        broadcastSeg.querySelectorAll('.seg-btn').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-pol') === p);
+        });
+      };
+      markPol('everyone');
+      broadcastSeg.querySelectorAll('.seg-btn').forEach((b) => {
+        b.addEventListener('click', () => markPol(b.getAttribute('data-pol') ?? 'everyone'));
+      });
+    }
     createBtn?.addEventListener('click', () => {
       void (async () => {
         const nameInput = input$(container, 'room-name');
@@ -179,6 +207,8 @@ export function renderUser(container: HTMLElement): void {
           return;
         }
         const maxUsers = Number((maxSelect as HTMLSelectElement).value || 5);
+        const censorEl = container.querySelector<HTMLInputElement>('#room-censorship');
+        const policyEl = container.querySelector<HTMLElement>('#room-broadcast-seg')!.querySelector<HTMLButtonElement>('.seg-btn.active');
         const id = normalizeRoomId(randomId());
         let owner: string;
         try {
@@ -192,6 +222,9 @@ export function renderUser(container: HTMLElement): void {
           maxUsers,
           hostId: owner,
           createdAt: Date.now(),
+          censorship: censorEl?.checked ?? true,
+          broadcastPolicy: (policyEl?.getAttribute('data-pol') as BroadcastPolicy) || 'everyone',
+          moderators: [] as string[],
         };
         void writeRoomMeta(id, meta)
           .then(() => {
