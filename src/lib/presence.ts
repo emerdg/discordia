@@ -62,7 +62,7 @@ export async function listMembers(roomId: string): Promise<MemberInfo[]> {
   }
 }
 
-function toMember(peerId: string, m: { name?: string; emoji?: string; color?: string; sharing?: boolean; joinedAt?: number }): MemberInfo {
+function toMember(peerId: string, m: { name?: string; emoji?: string; color?: string; sharing?: boolean; joinedAt?: number; owner?: string }): MemberInfo {
   return {
     peerId,
     name: typeof m.name === 'string' ? m.name : 'Participante',
@@ -70,20 +70,31 @@ function toMember(peerId: string, m: { name?: string; emoji?: string; color?: st
     color: typeof m.color === 'string' ? m.color : '#ff5c5c',
     sharing: Boolean(m.sharing),
     joinedAt: typeof m.joinedAt === 'number' ? m.joinedAt : Date.now(),
+    ...(typeof m.owner === 'string' ? { owner: m.owner } : {}),
   };
 }
+
+/**
+ * Normaliza campos do perfil antes de gravar. O XSS de renderização é
+ * bloqueado com escapeHtml no cliente; aqui só garantimos formato/limites
+ * compatíveis com as regras de validação do RTDB.
+ */
+const sanitizeName = (name: string): string => name.trim().slice(0, 48) || 'Participante';
+const sanitizeEmoji = (emoji: string): string => [...emoji].slice(0, 16).join('') || '🐢';
+const sanitizeColor = (color: string): string => (/^#[0-9a-f]{6}$/i.test(color) ? color : '#ff5c5c');
 
 /** Registra o membro na sala e limpa automaticamente ao fechar a aba. */
 export async function joinPresence(
   roomId: string,
-  info: { peerId: string; name: string; emoji: string; color: string },
+  info: { peerId: string; name: string; emoji: string; color: string; owner: string },
 ): Promise<void> {
   const m = ref(getDb(), node.member(roomId, info.peerId));
   await set(m, {
-    name: info.name,
-    emoji: info.emoji,
-    color: info.color,
+    name: sanitizeName(info.name),
+    emoji: sanitizeEmoji(info.emoji),
+    color: sanitizeColor(info.color),
     sharing: false,
+    owner: info.owner,
     joinedAt: Date.now(),
   });
   onDisconnect(m).remove();

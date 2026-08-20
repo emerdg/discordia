@@ -1,4 +1,5 @@
 import { CONFIG } from '../lib/config';
+import { engineFlags } from './compat';
 import type { CodecPref, Resolution } from '../types';
 
 export interface CapturePrefs {
@@ -18,16 +19,7 @@ export async function startCapture(prefs: CapturePrefs): Promise<MediaStream> {
     throw new Error('Seu navegador não suporta captura de tela (getDisplayMedia).');
   }
 
-  const { width, height } = targetDimensions(prefs.resolution);
-  const screen = await navigator.mediaDevices.getDisplayMedia({
-    video: {
-      width: { ideal: width, max: 1920 },
-      height: { ideal: height, max: 1080 },
-      frameRate: { ideal: 30, max: 60 },
-      displaySurface: 'monitor',
-    },
-    audio: prefs.pcAudio,
-  });
+  const screen = await navigator.mediaDevices.getDisplayMedia(buildCaptureConstraints(prefs));
 
   const screenTrack = screen.getVideoTracks()[0];
   if (screenTrack) {
@@ -53,6 +45,27 @@ export async function startCapture(prefs: CapturePrefs): Promise<MediaStream> {
   }
 
   return screen;
+}
+
+/**
+ * Restrições de vídeo da captura. `displaySurface` só é enviada em motores
+ * que a tratam bem (Blink); em Gecko/WebKit fica fora para não gerar
+ * escolha/rejeição inesperada do seletor do sistema.
+ */
+export function buildCaptureConstraints(prefs: CapturePrefs): DisplayMediaStreamOptions {
+  const { width, height } = targetDimensions(prefs.resolution);
+  const video: MediaTrackConstraints = {
+    width: { ideal: width, max: 1920 },
+    height: { ideal: height, max: 1080 },
+    frameRate: { ideal: 30, max: 60 },
+  };
+  if (engineFlags().displaySurfaceSafe) {
+    video.displaySurface = 'monitor';
+  }
+  return {
+    video,
+    audio: prefs.pcAudio,
+  };
 }
 
 async function captureMic(on: boolean): Promise<MediaStream | null> {
@@ -101,9 +114,14 @@ export function encodingsFor(track: MediaStreamTrack, resolution: Resolution): R
  * Ordem de codecs preferida, de acordo com a configuração do usuário.
  * - 'vp8': VP8 primeiro (o mais universal entre Chrome/Edge/Firefox/Safari).
  * - 'h264': H.264 primeiro (permite aceleração de hardware NVENC/Quick Sync/VCN).
+ *
+ * Quando `RTCRtpSender.getCapabilities` não existe (Firefox antigo), retorna
+ * vazio e o caller pula `setCodecPreferences` — a ordem nativa do navegador
+ * (sem preferência) é usada, mantendo a negociação VP8 por padrão.
  */
 export function preferredVideoCodecs(pref: CodecPref): RTCRtpCodec[] {
-  const caps = typeof RTCRtpSender !== 'undefined' ? RTCRtpSender.getCapabilities?.('video') : null;
+  if (!engineFlags().hasGetCapabilities) return [];
+  const caps = RTCRtpSender.getCapabilities?.('video');
   if (!caps?.codecs) return [];
   const usable = caps.codecs.filter(
     (c) =>

@@ -525,6 +525,23 @@ select {
   background: var(--input-bg);
 }
 
+.landing-emoji-preview {
+  width: 46px;
+  height: 44px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
 @media (max-width: 520px) {
   .emoji-strip {
     grid-template-columns: repeat(6, 1fr);
@@ -1360,6 +1377,14 @@ select {
   flex-shrink: 0;
 }
 
+.chat-form button:disabled {
+  /* contagem regressiva anti-spam */
+  width: auto;
+  min-width: 44px;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* palco */
 
 .rr-stage {
@@ -1373,19 +1398,72 @@ select {
 .stage-view {
   flex: 1;
   position: relative;
+  display: grid;
+  grid-auto-rows: 1fr;
+  gap: 0;
   background:
     radial-gradient(600px 360px at 50% 40%, color-mix(in srgb, var(--a-1) 6%, transparent), transparent 70%),
     var(--stage-bg);
   min-height: 0;
 }
 
-.stage-view video {
+.stage-tile {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+  min-width: 0;
+  min-height: 0;
+}
+
+.stage-tile video {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+.tile-tools {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+
+.tile-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  backdrop-filter: blur(4px);
+}
+
+.tile-btn:hover {
+  border-color: var(--a-1);
+}
+
+.tile-label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--tile-color, #fff);
+  backdrop-filter: blur(4px);
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  z-index: 2;
 }
 
 .stage-placeholder {
@@ -1598,6 +1676,36 @@ select {
 
 .rr.fs.ui-hidden {
   cursor: none;
+}
+
+/* ------------------------------- easter egg (konami) ------------------------------- */
+
+.shake {
+  animation: kshake 0.6s;
+}
+
+@keyframes kshake {
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-8px); }
+  40%, 60% { transform: translateX(8px); }
+}
+
+.conf-pt {
+  position: fixed;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  z-index: 9999;
+  pointer-events: none;
+  animation: pt-fly 1.2s ease-out forwards;
+}
+
+@keyframes pt-fly {
+  to {
+    transform: translate(var(--dx), var(--dy)) scale(0.1);
+    opacity: 0;
+  }
 }
 
 /* ------------------------------- responsivo ------------------------------- */

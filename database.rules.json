@@ -2,10 +2,49 @@
   "rules": {
     ".read": false,
     ".write": false,
+
     "rooms": {
       "$roomId": {
-        ".read": true,
-        ".write": true
+        ".read": "auth != null",
+        ".write": false,
+
+        "members": {
+          "$peerId": {
+            ".write": "auth != null && (newData.val() === null ? (data.exists() ? data.child('owner').val() === auth.uid : true) : (data.exists() ? data.child('owner').val() === auth.uid : newData.child('owner').val() === auth.uid))",
+            ".validate": "newData.hasChildren(['name','emoji','color','sharing','owner','joinedAt']) && newData.child('owner').val() === auth.uid && newData.child('name').isString() && newData.child('name').val().length >= 1 && newData.child('name').val().length <= 48 && newData.child('emoji').isString() && newData.child('emoji').val().length <= 16 && newData.child('color').isString() && newData.child('color').val().matches(/^#[0-9a-fA-F]{6}$/) && newData.child('sharing').isBoolean() && newData.child('joinedAt').isNumber()"
+          }
+        },
+
+        "meta": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!data.exists() || data.child('hostId').val() === auth.uid)",
+          ".validate": "newData.hasChildren(['name','maxUsers','hostId','createdAt']) && newData.child('hostId').val() === auth.uid && newData.child('name').isString() && newData.child('name').val().length >= 1 && newData.child('name').val().length <= 64 && newData.child('maxUsers').isNumber() && newData.child('maxUsers').val() >= 1 && newData.child('maxUsers').val() <= 100 && newData.child('createdAt').isNumber()"
+        },
+
+        "signal": {
+          "$from": {
+            "$to": {
+              ".write": "auth != null && newData.val() === null",
+
+              "$kind": {
+                "offer": {
+                  ".write": "auth != null && (newData.val() === null || newData.child('owner').val() === auth.uid)",
+                  ".validate": "newData.val() === null || (newData.hasChildren(['type','sdp','owner']) && newData.child('owner').val() === auth.uid && newData.child('type').val() === 'offer' && newData.child('sdp').isString())"
+                },
+                "answer": {
+                  ".write": "auth != null && (newData.val() === null || newData.child('owner').val() === auth.uid)",
+                  ".validate": "newData.val() === null || (newData.hasChildren(['type','sdp','owner']) && newData.child('owner').val() === auth.uid && newData.child('type').val() === 'answer' && newData.child('sdp').isString())"
+                },
+                "ice": {
+                  "$idx": {
+                    ".write": "auth != null && (newData.val() === null || newData.child('owner').val() === auth.uid)",
+                    ".validate": "newData.val() === null || (newData.hasChildren(['candidate','owner']) && newData.child('owner').val() === auth.uid && newData.child('candidate').hasChildren(['candidate']) && newData.child('candidate').child('candidate').isString())"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

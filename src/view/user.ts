@@ -1,5 +1,5 @@
-import { firebaseMissing, firebaseReady } from '../lib/firebase';
-import { isValidRoomId, newPeerId, normalizeRoomId, randomId } from '../lib/config';
+import { ensureAuthed, firebaseMissing, firebaseReady } from '../lib/firebase';
+import { isValidRoomId, normalizeRoomId, randomId } from '../lib/config';
 import { countMembers, readRoomMeta, writeRoomMeta } from '../lib/presence';
 import {
   PRESET_COLORS,
@@ -31,7 +31,7 @@ export function renderUser(container: HTMLElement): void {
         <header class="topbar">
           <a href="#/" class="back-btn icon-btn" title="Voltar">${icon('back', 18)}</a>
           <div class="user-chip" id="user-chip" style="--chip-color:${prefs.color}">
-            <span class="chip-avatar"><span class="chip-emoji">${prefs.emoji}</span></span>
+            <span class="chip-avatar"><span class="chip-emoji">${escapeHtml(prefs.emoji)}</span></span>
             <span class="chip-name">${escapeHtml(prefs.name)}</span>
           </div>
         </header>
@@ -105,17 +105,23 @@ export function renderUser(container: HTMLElement): void {
                     <option value="100">100 mensagens</option>
                   </select>
                 </div>
-                <div class="setting">
+                <div class="setting setting-emoji">
                   <span class="setting-label">Cor do seu nome</span>
                   <div class="colors" id="color-picker"></div>
                   <label class="custom-color">
                     Personalizar <input type="color" id="color-custom" value="${prefs.color}" />
                   </label>
-                </div>
-                <div class="setting setting-emoji">
-                  <span class="setting-label">Seu emoji</span>
+                  <span class="setting-label" style="margin-top:8px">Seu emoji</span>
                   <input id="emoji-search" class="emoji-search" type="search" placeholder="Buscar emoji (ex.: coração, gato, fogo)…" autocomplete="off" />
                   <div class="emoji-wrap"><div class="emoji-grid" id="emoji-grid"></div></div>
+                </div>
+                <div class="setting">
+                  <span class="setting-label">Banda (múltiplas telas)</span>
+                  <label class="switch" for="auto-downscale">
+                    <input type="checkbox" id="auto-downscale" ${prefs.autoDownscale ? 'checked' : ''}>
+                    A partir da 3ª tela, usar até 720p nas ativas
+                  </label>
+                  <p class="hint">Reduz o gasto de banda ao assistir 3 ou mais telas ao mesmo tempo. Desative para manter 1080p em todas.</p>
                 </div>
                 <div class="setting">
                   <span class="setting-label">Filtro de linguagem</span>
@@ -153,31 +159,44 @@ export function renderUser(container: HTMLElement): void {
 
     const createBtn = container.querySelector('#btn-create');
     createBtn?.addEventListener('click', () => {
-      const nameInput = input$(container, 'room-name');
-      const name = nameInput.value.trim();
-      if (!name) {
-        toast('Dê um nome para a sala.');
-        nameInput.focus();
-        return;
-      }
-      if (!firebaseReady()) {
-        toast('Firebase não configurado: ' + firebaseMissing().join(', '));
-        return;
-      }
-      const maxUsers = Number((maxSelect as HTMLSelectElement).value || 5);
-      const id = normalizeRoomId(randomId());
-      const meta = {
-        name,
-        maxUsers,
-        hostId: newPeerId(),
-        createdAt: Date.now(),
-      };
-      void writeRoomMeta(id, meta)
-        .then(() => {
-          addRoom(name, id);
-          location.hash = `#/room/${id}`;
-        })
-        .catch(() => toast('Falha ao criar a sala no hub. Tente de novo.'));
+      void (async () => {
+        const nameInput = input$(container, 'room-name');
+        const name = nameInput.value.trim();
+        if (!name) {
+          toast('Dê um nome para a sala.');
+          nameInput.focus();
+          return;
+        }
+        if (name.length > 40) {
+          toast('Nome muito longo (máximo 40 caracteres).');
+          return;
+        }
+        if (!firebaseReady()) {
+          toast('Firebase não configurado: ' + firebaseMissing().join(', '));
+          return;
+        }
+        const maxUsers = Number((maxSelect as HTMLSelectElement).value || 5);
+        const id = normalizeRoomId(randomId());
+        let owner: string;
+        try {
+          owner = await ensureAuthed();
+        } catch {
+          toast('Autenticação anônima indisponível. Ative "Anônimo" em Authentication → Sign-in method.');
+          return;
+        }
+        const meta = {
+          name,
+          maxUsers,
+          hostId: owner,
+          createdAt: Date.now(),
+        };
+        void writeRoomMeta(id, meta)
+          .then(() => {
+            addRoom(name, id);
+            location.hash = `#/room/${id}`;
+          })
+          .catch(() => toast('Falha ao criar a sala no hub. Tente de novo.'));
+      })();
     });
 
     const joinBtn = container.querySelector('#btn-join');
@@ -201,6 +220,12 @@ export function renderUser(container: HTMLElement): void {
         return;
       }
       void (async () => {
+        try {
+          await ensureAuthed();
+        } catch {
+          toast('Autenticação anônima indisponível. Ative "Anônimo" em Authentication → Sign-in method.');
+          return;
+        }
         const meta = await readRoomMeta(id);
         if (meta && (await countMembers(id)) >= meta.maxUsers) {
           toast(`Sala cheia (máximo ${meta.maxUsers}).`);
@@ -365,6 +390,13 @@ export function renderUser(container: HTMLElement): void {
     filterOff?.addEventListener('change', () => {
       prefs = patchPrefs({ filterOffensive: filterOff.checked });
       toast(filterOff.checked ? 'Filtro de linguagem ativado' : 'Filtro de linguagem desativado');
+    });
+
+    // redução de banda em 3+ telas
+    const autoDownscale = container.querySelector<HTMLInputElement>('#auto-downscale');
+    autoDownscale?.addEventListener('change', () => {
+      prefs = patchPrefs({ autoDownscale: autoDownscale.checked });
+      toast(autoDownscale.checked ? '3+ telas: 720p automático' : '3+ telas: mantém a resolução escolhida');
     });
 
     const refreshSwatches = (): void => {

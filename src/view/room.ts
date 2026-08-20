@@ -1,4 +1,4 @@
-import { firebaseReady } from '../lib/firebase';
+import { firebaseReady, ensureAuthed } from '../lib/firebase';
 import { isValidRoomId } from '../lib/config';
 import { countMembers, readRoomMeta, watchHubConnection, watchRoomMeta } from '../lib/presence';
 import { addRoom, getPrefs, getRoomHistory, patchPrefs } from '../lib/storage';
@@ -8,9 +8,17 @@ import { startCapture, stopStream } from '../web/media';
 import { censorText } from '../lib/words';
 import { escapeHtml, toast, withTimeout } from '../util/dom';
 import { icon, logoMark } from '../icons';
-import type { ChatMessage, MemberInfo, UserPrefs } from '../types';
+import type { ChatMessage, MemberInfo, Resolution, UserPrefs } from '../types';
 
-type WatchTarget = { kind: 'none' } | { kind: 'self' } | { kind: 'peer'; peerId: string };
+interface StageTile {
+  key: string;
+  isSelf: boolean;
+  el: HTMLDivElement;
+  video: HTMLVideoElement;
+  labelEl: HTMLElement;
+  muteBtn: HTMLButtonElement;
+  muted: boolean;
+}
 
 interface RoomUi {
   container: HTMLElement;
@@ -22,7 +30,8 @@ interface RoomUi {
   chatMore: HTMLButtonElement;
   chatForm: HTMLFormElement;
   chatInput: HTMLInputElement;
-  mainVideo: HTMLVideoElement;
+  chatSend: HTMLButtonElement;
+  stageView: HTMLElement;
   placeholder: HTMLElement;
   selfPreview: HTMLElement;
   selfVideo: HTMLVideoElement;
@@ -31,13 +40,15 @@ interface RoomUi {
   txMic: HTMLInputElement;
   txPc: HTMLInputElement;
   txRes: HTMLSelectElement;
-  txApply: HTMLButtonElement;
   txStart: HTMLButtonElement;
+  btnTransmit: HTMLButtonElement;
   volGroup: HTMLElement;
   btnVol: HTMLButtonElement;
   volRange: HTMLInputElement;
   status: HTMLElement;
 }
+
+const MAX_TILES = 4;
 
 export function renderRoom(container: HTMLElement, rawRoomId: string): () => Promise<void> {
   const prefs = getPrefs();
@@ -52,9 +63,6 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   let mesh: Mesh;
   let localStream: MediaStream | null = null;
   let transmitting = false;
-  let capturedMic = false;
-  let capturedPcAudio = false;
-  let watching: WatchTarget = { kind: 'none' };
   const watchers = new Map<string, boolean>();
   let cleanupDone = false;
 
@@ -81,7 +89,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <span class="rr-actions">
             <button id="btn-copy-id" class="icon-btn" title="Copiar ID da sala">${icon('copy', 17)}</button>
             <button id="btn-fs" class="icon-btn" title="Tela cheia">${icon('fullscreen', 17)}</button>
-            <button id="btn-dbg" class="icon-btn" title="Diagnóstico">${icon('diag', 17)}</button>
+            <button id="btn-dbg" class="icon-btn" title="Diagnóstico" hidden>${icon('diag', 17)}</button>
             <button id="btn-leave" class="danger">${icon('leave', 16)} Sair</button>
           </span>
         </div>
@@ -101,13 +109,12 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <button id="chat-more" class="ghost chat-more" hidden>Ver mensagens mais antigas</button>
           <form id="chat-form" class="chat-form">
             <input id="chat-input" type="text" placeholder="Mensagem..." autocomplete="off" maxlength="1000" />
-            <button type="submit" class="btn-primary" title="Enviar">${icon('send', 17)}</button>
+            <button id="chat-send" type="submit" class="btn-primary" title="Enviar">${icon('send', 17)}</button>
           </form>
         </aside>
 
         <main class="rr-stage">
           <div class="stage-view" id="stage-view">
-            <video id="main-video" autoplay playsinline hidden></video>
             <div class="stage-placeholder" id="stage-placeholder">
               <div class="ph-ic">${icon('monitor', 30)}</div>
               <p>Ninguém na tela ainda.</p>
@@ -117,7 +124,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <div class="stage-tools">
             <div class="tools">
               <button id="btn-chat-toggle" class="icon-btn chat-toggle-btn" title="Chat">${icon('chat', 17)}</button>
-              <button id="btn-transmit" class="btn-primary">${icon('broadcast', 17)} Transmitir</button>
+              <button id="btn-transmit" class="btn-primary">${icon('broadcast', 17)} <span>Transmitir</span></button>
               <div id="tx-options" class="tx-panel" hidden>
                 <label class="switch" title="Microfone">
                   <input type="checkbox" id="tx-mic" ${prefs.mic ? 'checked' : ''}>
@@ -134,7 +141,6 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
                     <option value="480p" ${prefs.resolution === '480p' ? 'selected' : ''}>480p</option>
                   </select>
                 </label>
-                <button id="tx-apply" class="tx-apply ghost" title="Aplica microfone/áudio/resolução na transmissão atual">Aplicar</button>
                 <button id="tx-start" class="btn-primary">Iniciar transmissão</button>
               </div>
             </div>
@@ -165,7 +171,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     chatMore: $('chat-more') as HTMLButtonElement,
     chatForm: $('chat-form') as HTMLFormElement,
     chatInput: $('chat-input') as HTMLInputElement,
-    mainVideo: $('main-video') as HTMLVideoElement,
+    chatSend: $('chat-send') as HTMLButtonElement,
+    stageView: $('stage-view'),
     placeholder: $('stage-placeholder'),
     selfPreview: $('self-preview'),
     selfVideo: $('self-video') as HTMLVideoElement,
@@ -174,8 +181,8 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     txMic: $('tx-mic') as HTMLInputElement,
     txPc: $('tx-pc') as HTMLInputElement,
     txRes: $('tx-res') as HTMLSelectElement,
-    txApply: $('tx-apply') as HTMLButtonElement,
     txStart: $('tx-start') as HTMLButtonElement,
+    btnTransmit: $('btn-transmit') as HTMLButtonElement,
     volGroup: $('vol-group'),
     btnVol: $('btn-vol') as HTMLButtonElement,
     volRange: $('vol-range') as HTMLInputElement,
@@ -188,19 +195,160 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     ui.status.textContent = text;
   };
 
-  const showStage = (kind: 'none' | 'video'): void => {
-    ui.placeholder.classList.toggle('hidden', kind === 'video');
-    ui.mainVideo.hidden = kind !== 'video';
-    if (kind === 'video') {
-      void ui.mainVideo.play().catch(() => undefined);
-    }
-  };
-
   const updateRoomName = (name: string): void => {
     if (!name) return;
     ui.roomName.textContent = name;
     document.title = `${name} — Discórdia`;
     addRoom(name, roomId);
+  };
+
+  // ------------------------------------------------------------ grade (tiles)
+
+  const tiles = new Map<string, StageTile>();
+  const suppressEnd = new Set<string>();
+  let downscaled = false;
+
+  const watchedPeers = (): string[] => [...tiles.keys()].filter((k) => k !== 'self');
+
+  const updateStage = (): void => {
+    const n = tiles.size;
+    ui.placeholder.hidden = n > 0;
+    if (n === 0) {
+      ui.stageView.style.gridTemplateColumns = '';
+      ui.stageView.style.gridTemplateRows = '';
+      return;
+    }
+    const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+    const rows = Math.ceil(n / cols);
+    ui.stageView.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    ui.stageView.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+  };
+
+  let masterMuted = false;
+  let masterVol = 1;
+
+  const updateVolIcon = (): void => {
+    const name = masterMuted || masterVol === 0 ? 'volMute' : masterVol < 0.5 ? 'volMid' : 'volHigh';
+    ui.btnVol.innerHTML = icon(name, 16);
+    ui.btnVol.title = masterMuted ? 'Ativar som' : 'Silenciar';
+  };
+
+  const applyVolume = (): void => {
+    for (const t of tiles.values()) {
+      t.video.muted = t.isSelf || masterMuted || t.muted;
+      t.video.volume = masterVol;
+      t.muteBtn.innerHTML = icon(t.muted ? 'volMute' : 'volHigh', 14);
+    }
+    updateVolIcon();
+  };
+
+  const makeTile = (key: string, isSelf: boolean, name: string, color: string): StageTile => {
+    const el = document.createElement('div');
+    el.className = 'stage-tile';
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = isSelf;
+
+    const tools = document.createElement('div');
+    tools.className = 'tile-tools';
+
+    const muteBtn = document.createElement('button');
+    muteBtn.type = 'button';
+    muteBtn.className = 'tile-btn tile-mute';
+    muteBtn.title = 'Silenciar';
+    muteBtn.innerHTML = icon('volHigh', 14);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'tile-btn tile-close';
+    closeBtn.title = 'Fechar';
+    closeBtn.innerHTML = icon('x', 15);
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'tile-label';
+    labelEl.style.setProperty('--tile-color', color);
+    labelEl.textContent = name;
+
+    if (!isSelf) tools.append(muteBtn);
+    tools.append(closeBtn);
+    el.append(video, tools, labelEl);
+    ui.stageView.append(el);
+
+    const tile: StageTile = { key, isSelf, el, video, labelEl, muteBtn, muted: false };
+    tiles.set(key, tile);
+
+    closeBtn.addEventListener('click', () => closeTile(key));
+    muteBtn.addEventListener('click', () => {
+      tile.muted = !tile.muted;
+      applyVolume();
+    });
+
+    return tile;
+  };
+
+  /** Remove a tile da grade (e da conexão de mídia, se for de outro). */
+  const closeTile = (key: string): void => {
+    if (key !== 'self') mesh.unwatch(key);
+    removeTileEl(key);
+  };
+
+  const removeTileEl = (key: string): void => {
+    const tile = tiles.get(key);
+    if (tile) {
+      tile.video.srcObject = null;
+      tile.el.remove();
+      tiles.delete(key);
+    }
+    suppressEnd.delete(key);
+    updateStage();
+    applyVolume();
+    renderRoster(members);
+    reconcileDownscale();
+  };
+
+  /** Reconecta uma tile (para trocar de resolução) mantendo-a na grade. */
+  const restartTile = (key: string, wanted?: Resolution): void => {
+    if (key === 'self') return;
+    suppressEnd.add(key);
+    const tile = tiles.get(key);
+    if (tile) tile.video.srcObject = null;
+    mesh.unwatch(key);
+    setTimeout(() => {
+      if (!tiles.has(key)) return;
+      void mesh.watch(key, wanted ? { wantedRes: wanted } : undefined).then((ok) => {
+        if (!ok) {
+          suppressEnd.delete(key);
+          removeTileEl(key);
+        }
+      });
+    }, 350);
+  };
+
+  const restartAll = (wanted?: Resolution): void => {
+    watchedPeers().forEach((k, i) => {
+      setTimeout(() => restartTile(k, wanted), i * 350);
+    });
+  };
+
+  /** Aplica redução de banda (720p) a partir da 3ª tela assistida. */
+  const reconcileDownscale = (): void => {
+    const n = watchedPeers().length;
+    if (!prefs.autoDownscale) {
+      if (downscaled) {
+        downscaled = false;
+        restartAll(undefined);
+      }
+      return;
+    }
+    if (n >= 3 && !downscaled) {
+      downscaled = true;
+      restartAll('720p');
+      setStatus(`${n} telas abertas — reduzindo banda para 720p.`);
+    } else if (n < 3 && downscaled) {
+      downscaled = false;
+      restartAll(undefined);
+    }
   };
 
   // ------------------------------------------------------------- roster
@@ -214,17 +362,15 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       chip.className = 'roster-chip';
       chip.style.setProperty('--chip-color', m.color);
       chip.dataset.peerId = m.peerId;
-      chip.innerHTML = `<span class="rc-emoji">${m.emoji}</span><span class="rc-name">${escapeHtml(m.name)}</span>`;
+      chip.innerHTML = `<span class="rc-emoji">${escapeHtml(m.emoji)}</span><span class="rc-name">${escapeHtml(m.name)}</span>`;
       if (m.sharing) {
         const live = document.createElement('span');
         live.className = 'live-dot';
         live.title = 'Transmitindo agora';
         chip.append(live);
       }
-      const isWatching =
-        watching.kind === 'peer' && watching.peerId === m.peerId;
-      const isSelfView = watching.kind === 'self' && m.peerId === mesh.peerId;
-      if (isWatching || isSelfView) chip.classList.add('active');
+      const isOpen = tiles.has(m.peerId) || (m.peerId === mesh.peerId && tiles.has('self'));
+      if (isOpen) chip.classList.add('active');
       chip.addEventListener('click', () => void onChipClick(m));
       ui.roster.append(chip);
     }
@@ -233,42 +379,62 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
   };
 
+  const openWatch = async (m: MemberInfo): Promise<void> => {
+    if (tiles.size >= MAX_TILES) {
+      toast(`Limite de ${MAX_TILES} telas simultâneas.`);
+      return;
+    }
+    if (tiles.has(m.peerId)) {
+      closeTile(m.peerId);
+      renderRoster(members);
+      return;
+    }
+    makeTile(m.peerId, false, `${m.emoji} ${m.name}`, m.color);
+    updateStage();
+    applyVolume();
+    renderRoster(members);
+    setStatus(`Conectando com ${m.name}…`);
+    const ok = await mesh.watch(m.peerId, downscaled ? { wantedRes: '720p' } : undefined);
+    if (!ok) {
+      setStatus(`Não foi possível assistir ${m.name}.`);
+      removeTileEl(m.peerId);
+      return;
+    }
+    setStatus(`Assistindo ${m.name}…`);
+    reconcileDownscale();
+  };
+
   const onChipClick = async (m: MemberInfo): Promise<void> => {
     if (m.peerId === mesh.peerId) {
-      toggleSelfView();
+      toggleSelfTile();
       return;
     }
     if (!m.sharing) {
       setStatus(`${m.name} não está transmitindo agora.`);
       return;
     }
-    if (watching.kind === 'peer' && watching.peerId === m.peerId) {
-      stopWatching();
-      setStatus('Transmissão encerrada.');
-      renderRoster(members);
+    await openWatch(m);
+  };
+
+  const toggleSelfTile = (): void => {
+    if (!localStream) {
+      setStatus('Você ainda não está transmitindo.');
       return;
     }
-    if (watching.kind === 'peer') mesh.unwatch(watching.peerId);
-    if (watching.kind === 'self') clearMainVideo();
-    const ok = await mesh.watch(m.peerId);
-    if (ok) {
-      watching = { kind: 'peer', peerId: m.peerId };
-      setStatus(`Assistindo ${m.name}…`);
-      renderRoster(members);
-    } else {
-      setStatus(`Não foi possível iniciar a transmissão de ${m.name}.`);
+    if (tiles.has('self')) {
+      removeTileEl('self');
+      return;
     }
-  };
-
-  const stopWatching = (): void => {
-    if (watching.kind === 'peer') mesh.unwatch(watching.peerId);
-    watching = { kind: 'none' };
-    clearMainVideo();
-  };
-
-  const clearMainVideo = (): void => {
-    ui.mainVideo.srcObject = null;
-    showStage('none');
+    if (tiles.size >= MAX_TILES) {
+      toast(`Limite de ${MAX_TILES} telas simultâneas.`);
+      return;
+    }
+    const tile = makeTile('self', true, 'Você', prefs.color);
+    tile.video.srcObject = localStream;
+    tile.video.muted = true;
+    updateStage();
+    applyVolume();
+    renderRoster(members);
   };
 
   // --------------------------------------------------------- prévia própria
@@ -298,25 +464,14 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     });
   };
 
-  const toggleSelfView = (): void => {
-    if (!localStream) {
-      setStatus('Você ainda não está transmitindo.');
-      return;
-    }
-    if (watching.kind === 'self') {
-      watching = { kind: 'none' };
-      clearMainVideo();
-    } else {
-      if (watching.kind === 'peer') mesh.unwatch(watching.peerId);
-      watching = { kind: 'self' };
-      ui.mainVideo.muted = true;
-      ui.mainVideo.srcObject = localStream;
-      showStage('video');
-    }
-    renderRoster(members);
-  };
-
   // --------------------------------------------------------- transmissão
+
+  const setTransmitBtn = (on: boolean): void => {
+    ui.btnTransmit.innerHTML =
+      icon(on ? 'leave' : 'broadcast', 17) + ` <span>${on ? 'Encerrar transmissão' : 'Transmitir'}</span>`;
+    ui.btnTransmit.classList.toggle('danger', on);
+    ui.btnTransmit.classList.toggle('btn-primary', !on);
+  };
 
   const startTx = async (): Promise<void> => {
     if (transmitting) return;
@@ -337,55 +492,14 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     mesh.setResolution(resolution);
     await mesh.setTransmitting(true);
     transmitting = true;
-    capturedMic = capture.mic;
-    capturedPcAudio = capture.pcAudio;
-    ui.txStart.textContent = 'Parar transmissão';
+    ui.txOptions.hidden = true;
+    setTransmitBtn(true);
     ui.selfPreview.hidden = false;
     ui.selfVideo.srcObject = localStream;
     playPreviewOnce();
     ui.selfPreview.classList.add('on');
     setStatus('Transmitindo. Clique em você ou em outros para ver.');
     renderRoster(members);
-  };
-
-  /** Reaplica microfone/áudio/resolução na transmissão atual. */
-  const applyTx = async (): Promise<void> => {
-    const next = {
-      mic: ui.txMic.checked,
-      pcAudio: ui.txPc.checked,
-      resolution: ui.txRes.value as UserPrefs['resolution'],
-    };
-    patchPrefs(next);
-    mesh.setResolution(next.resolution);
-
-    if (!transmitting) {
-      toast('Configurações salvas. Elas valem ao iniciar a transmissão.');
-      return;
-    }
-
-    const captureChanged = next.mic !== capturedMic || next.pcAudio !== capturedPcAudio;
-    try {
-      if (captureChanged) {
-        setStatus('Selecione a tela novamente para aplicar o áudio…');
-        const fresh = await startCapture({ ...next });
-        const old = localStream;
-        localStream = fresh;
-        mesh.setLocalStream(fresh);
-        if (old) stopStream(old);
-        capturedMic = next.mic;
-        capturedPcAudio = next.pcAudio;
-        ui.selfVideo.srcObject = fresh;
-        playPreviewOnce();
-        if (watching.kind === 'self') {
-          ui.mainVideo.srcObject = fresh;
-        }
-      }
-      mesh.closeIncoming();
-      mesh.requestMediaRefresh();
-      setStatus('Alterações aplicadas. Reconectando espectadores…');
-    } catch {
-      setStatus('Captura cancelada — nada foi alterado.');
-    }
   };
 
   const stopTx = async (): Promise<void> => {
@@ -398,19 +512,60 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       stopStream(localStream);
       localStream = null;
     }
-    capturedMic = false;
-    capturedPcAudio = false;
     ui.selfPreview.hidden = true;
     ui.selfVideo.srcObject = null;
-    ui.txStart.textContent = 'Iniciar transmissão';
-    if (watching.kind === 'self') {
-      watching = { kind: 'none' };
-      clearMainVideo();
-    }
+    ui.txOptions.hidden = true;
+    setTransmitBtn(false);
+    if (tiles.has('self')) removeTileEl('self');
     renderRoster(members);
   };
 
   // -------------------------------------------------------------- chat
+
+  // Botão "enviar" mostra a contagem regressiva durante o intervalo anti-spam.
+  const SEND_ICON = icon('send', 17);
+  let sendCooldownTimer: number | null = null;
+  let sendCooldownIvl: number | null = null;
+
+  const clearSendCooldown = (): void => {
+    if (sendCooldownTimer != null) {
+      clearTimeout(sendCooldownTimer);
+      sendCooldownTimer = null;
+    }
+    if (sendCooldownIvl != null) {
+      clearInterval(sendCooldownIvl);
+      sendCooldownIvl = null;
+    }
+    if (ui.chatSend.disabled) {
+      ui.chatSend.disabled = false;
+      ui.chatSend.title = 'Enviar';
+      ui.chatSend.innerHTML = SEND_ICON;
+    }
+  };
+
+  const armSendCooldown = (waitMs: number): void => {
+    if (waitMs <= 0) {
+      clearSendCooldown();
+      return;
+    }
+    clearSendCooldown();
+    ui.chatSend.disabled = true;
+    ui.chatSend.title = 'Aguarde para enviar outra mensagem';
+    const deadline = Date.now() + waitMs;
+    const render = (): void => {
+      const remaining = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+      ui.chatSend.innerHTML = `${remaining}s`;
+    };
+    render();
+    sendCooldownIvl = window.setInterval(() => {
+      if (Date.now() >= deadline) {
+        clearSendCooldown();
+      } else {
+        render();
+      }
+    }, 250);
+    sendCooldownTimer = window.setTimeout(() => clearSendCooldown(), waitMs);
+  };
 
   /** Texto exibido para a mensagem (aplica o filtro se ativo). */
   const displayText = (m: ChatMessage): string =>
@@ -529,11 +684,11 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           mesh.watchIncomingMedia(m.peerId);
         }
       }
-      const current = watching;
-      if (current.kind === 'peer') {
-        const target = list.find((m) => m.peerId === current.peerId);
-        if (!target || !target.sharing) stopWatching();
+      for (const k of watchedPeers()) {
+        const m = list.find((x) => x.peerId === k);
+        if (!m || !m.sharing) closeTile(k);
       }
+      if (tiles.has('self') && !transmitting) removeTileEl('self');
     },
     onChat,
     onRoomInfo: (info) => updateRoomName(info.name),
@@ -543,23 +698,24 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       setStatus(count > 0 ? `🙋 ${count} assistindo sua transmissão` : 'Transmitindo. Clique em você ou em outros para ver.');
     },
     onReceiveStream: (peerId, stream) => {
-      if (watching.kind !== 'peer' || watching.peerId !== peerId) return;
-      ui.mainVideo.muted = false;
-      ui.mainVideo.srcObject = stream;
-      showStage('video');
+      suppressEnd.delete(peerId);
+      const tile = tiles.get(peerId);
+      if (!tile) return;
+      tile.video.srcObject = stream;
+      if (!tile.isSelf) applyVolume();
+      void tile.video.play().catch(() => undefined);
     },
     onReceiveEnd: (peerId) => {
-      if (watching.kind === 'peer' && watching.peerId === peerId) {
-        watching = { kind: 'none' };
-        clearMainVideo();
-        renderRoster(members);
-      }
+      if (suppressEnd.has(peerId)) return;
+      removeTileEl(peerId);
     },
   });
 
   mesh.setCodecPref(prefs.codec);
 
   const mediaWatchers = new Set<string>();
+
+  // ----------------------------------------------------------------- events
 
   const copyId = (): void => {
     const text = roomId.toUpperCase();
@@ -571,7 +727,6 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   ui.root.querySelector('#btn-copy-id')?.addEventListener('click', copyId);
 
-  // botão de chat (visível no mobile): abre/fecha o painel
   const chatPanelEl = $('chat-panel');
   ui.root.querySelector('#btn-chat-toggle')?.addEventListener('click', () => {
     chatPanelEl.classList.toggle('open');
@@ -602,8 +757,9 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
   });
 
-  // ---- diagnóstico
+  // ---- diagnóstico (easter egg do Konami)
   const dbgEl = $('dbg') as HTMLPreElement;
+  const dbgBtn = ui.root.querySelector('#btn-dbg') as HTMLButtonElement;
   let dbgOn = false;
   let dbgTimer: number | null = null;
   const updateDbg = (): void => {
@@ -619,7 +775,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       `Sala: ${roomId}   |   Seu peer: ${s.peerId}`,
       `Participantes no banco: ${s.members} → ${names}`,
       `Canais de dados abertos: ${s.links}/${s.linksTotal}`,
-      `Assistindo: ${s.watching}   |   Assistindo você: ${s.watchedBy}`,
+      `Telas abertas: ${tiles.size}/${MAX_TILES}   |  Assistindo você: ${s.watchedBy}`,
       `Codec (envio): ${codecLabel}`,
     ];
     for (const m of mesh.mediaDiagnostics()) {
@@ -628,7 +784,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
     dbgEl.textContent = lines.join('\n');
   };
-  ui.root.querySelector('#btn-dbg')?.addEventListener('click', () => {
+  dbgBtn.addEventListener('click', () => {
     dbgOn = !dbgOn;
     dbgEl.hidden = !dbgOn;
     if (dbgOn) {
@@ -641,20 +797,88 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     }
   });
 
+  const triggerEasterEgg = (): void => {
+    // som
+    try {
+      const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AC) {
+        const ctx = new AC();
+        const notes = [523.25, 659.25, 783.99, 1046.5];
+        notes.forEach((f, i) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.type = 'triangle';
+          o.frequency.value = f;
+          const t = ctx.currentTime + i * 0.09;
+          g.gain.setValueAtTime(0.001, t);
+          g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+          o.start(t);
+          o.stop(t + 0.4);
+        });
+      }
+    } catch {
+      /* áudio indisponível */
+    }
+    // shake
+    ui.root.classList.add('shake');
+    setTimeout(() => ui.root.classList.remove('shake'), 650);
+    // partículas no botão
+    const r = dbgBtn.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    for (let i = 0; i < 24; i++) {
+      const p = document.createElement('span');
+      p.className = 'conf-pt';
+      const a = Math.random() * Math.PI * 2;
+      const dist = 50 + Math.random() * 130;
+      p.style.left = `${cx}px`;
+      p.style.top = `${cy}px`;
+      p.style.setProperty('--dx', `${Math.cos(a) * dist}px`);
+      p.style.setProperty('--dy', `${Math.sin(a) * dist - Math.random() * 40}px`);
+      p.style.background = Math.random() < 0.5 ? 'var(--a-2)' : '#ffffff';
+      document.body.append(p);
+      setTimeout(() => p.remove(), 1300);
+    }
+    // revela e abre o painel
+    dbgBtn.hidden = false;
+    if (!dbgOn) dbgBtn.click();
+    toast('It is dangerous to go alone take this 🛠️');
+  };
+
+  const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+  let konamiPos = 0;
+  const konamiHandler = (e: KeyboardEvent): void => {
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === KONAMI[konamiPos]) {
+      konamiPos += 1;
+      if (konamiPos === KONAMI.length) {
+        konamiPos = 0;
+        triggerEasterEgg();
+      }
+    } else {
+      konamiPos = key === KONAMI[0] ? 1 : 0;
+    }
+  };
+  document.addEventListener('keydown', konamiHandler);
+
   ui.root.querySelector('#btn-leave')?.addEventListener('click', () => {
     void leave();
   });
 
   ui.root.querySelector('#btn-transmit')?.addEventListener('click', () => {
-    ui.txOptions.hidden = !ui.txOptions.hidden;
+    if (transmitting) {
+      void stopTx();
+    } else {
+      ui.txOptions.hidden = !ui.txOptions.hidden;
+    }
   });
 
   ui.txStart.addEventListener('click', () => {
-    if (transmitting) void stopTx();
-    else void startTx();
+    void startTx();
   });
-
-  ui.txApply.addEventListener('click', () => void applyTx());
 
   ui.selfToggle.addEventListener('click', () => {
     if (ui.selfVideo.paused) {
@@ -667,29 +891,21 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   ui.selfVideo.addEventListener('pause', syncSelfToggle);
   ui.selfVideo.addEventListener('play', syncSelfToggle);
 
-  const updateVolIcon = (): void => {
-    const name =
-      ui.mainVideo.muted || ui.mainVideo.volume === 0 ? 'volMute' : ui.mainVideo.volume < 0.5 ? 'volMid' : 'volHigh';
-    ui.btnVol.innerHTML = icon(name, 16);
-    ui.btnVol.title = ui.mainVideo.muted ? 'Ativar som' : 'Silenciar';
-  };
   updateVolIcon();
   ui.btnVol.addEventListener('click', () => {
-    ui.mainVideo.muted = !ui.mainVideo.muted;
-    updateVolIcon();
+    masterMuted = !masterMuted;
+    applyVolume();
   });
   ui.volRange.addEventListener('input', () => {
-    const v = Number(ui.volRange.value) / 100;
-    ui.mainVideo.volume = v;
-    ui.mainVideo.muted = !(v > 0);
-    updateVolIcon();
+    masterVol = Number(ui.volRange.value) / 100;
+    masterMuted = !(masterVol > 0);
+    applyVolume();
   });
 
   ui.txRes.addEventListener('change', () => {
     const r = ui.txRes.value;
     patchPrefs({ resolution: r as UserPrefs['resolution'] });
     mesh.setResolution(r as UserPrefs['resolution']);
-    if (transmitting) setStatus(`Resolução ${r}. Será aplicada ao reiniciar a transmissão.`);
   });
 
   ui.chatForm.addEventListener('submit', (e) => {
@@ -699,6 +915,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     const wait = SPAM_MS - (now - lastChatAt);
     if (wait > 0) {
       toast(`Aguarde ${Math.ceil(wait / 1000)}s para enviar outra mensagem.`);
+      armSendCooldown(wait);
       return;
     }
     let text = ui.chatInput.value.trim();
@@ -707,6 +924,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     if (!text.trim()) return;
     mesh.sendChat(text);
     lastChatAt = Date.now();
+    armSendCooldown(SPAM_MS);
     ui.chatInput.value = '';
     ui.chatInput.focus();
   });
@@ -719,18 +937,21 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     if (cleanupDone) return;
     cleanupDone = true;
     if (dbgTimer != null) clearInterval(dbgTimer);
+    clearSendCooldown();
     await stopTx();
     offMeta?.();
     offHub?.();
     await mesh.destroy();
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('mousemove', poke);
+    document.removeEventListener('keydown', konamiHandler);
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     location.hash = '#/user';
   };
 
   const doJoin = async (): Promise<void> => {
     try {
+      await ensureAuthed();
       const hist = getRoomHistory(roomId);
       const meta = await withTimeout(readRoomMeta(roomId), 5000, null);
       if (meta) {
@@ -767,7 +988,11 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       void ui.chatInput.focus();
     } catch (err) {
       console.error('[sala] falha ao entrar:', err);
-      toast('Falha ao entrar na sala. Pressione F12 e veja o console.');
+      const msg =
+        err instanceof Error && /auth/i.test(err.message)
+          ? 'Autenticação anônima indisponível. Ative "Anônimo" em Authentication → Sign-in method e recarregue.'
+          : 'Falha ao entrar na sala. Pressione F12 e veja o console.';
+      toast(msg);
     }
   };
 
@@ -777,12 +1002,14 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     if (!cleanupDone) {
       cleanupDone = true;
       if (dbgTimer != null) clearInterval(dbgTimer);
+      clearSendCooldown();
       await stopTx();
       offMeta?.();
       offHub?.();
       await mesh.destroy();
       document.removeEventListener('fullscreenchange', onFsChange);
       document.removeEventListener('mousemove', poke);
+      document.removeEventListener('keydown', konamiHandler);
     }
   };
 }

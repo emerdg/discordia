@@ -1,14 +1,14 @@
 import { defineConfig } from 'vite';
 
-// Build paralelo para a URL /testes (preview do novo visual sem tocar na produção).
+// Build paralelo para a URL /teste (preview do novo visual sem tocar na produção).
 export default defineConfig({
-  base: '/testes/',
+  base: '/teste/',
   server: {
     host: true,
     port: 5174,
   },
   build: {
-    outDir: 'dist/testes',
+    outDir: 'dist/teste',
     emptyOutDir: true,
     sourcemap: true,
   },

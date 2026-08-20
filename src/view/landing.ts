@@ -25,11 +25,14 @@ export function renderLanding(container: HTMLElement): void {
 
         <form id="landing-form" class="landing-card">
           <label class="field-label" for="landing-name">Como você quer aparecer?</label>
-          <input id="landing-name" type="text" placeholder="${escapeHtml(currentName || 'Ex.: Elias')}"
-                 value="${escapeHtml(currentName)}" autocomplete="off" maxlength="24" />
+          <div class="input-row">
+            <span id="landing-emoji-preview" class="landing-emoji-preview">${prefs.emoji}</span>
+            <input id="landing-name" type="text" placeholder="${escapeHtml(currentName || 'Ex.: Elias')}"
+                   value="${escapeHtml(currentName)}" autocomplete="off" maxlength="24" />
+            <button type="submit" id="landing-go" class="btn-primary" disabled>${icon('broadcast', 16)} Entrar</button>
+          </div>
           <label class="field-label" for="landing-emoji-strip">Escolha seu emoji</label>
           <div class="emoji-strip" id="landing-emoji-strip"></div>
-          <button type="submit" id="landing-go" class="btn-primary" disabled>${icon('broadcast', 16)} Entrar</button>
         </form>
       </div>
 
@@ -47,21 +50,27 @@ export function renderLanding(container: HTMLElement): void {
   const strip = container.querySelector<HTMLElement>('#landing-emoji-strip');
   if (!form || !nameInput || !goBtn || !strip) return;
 
-  let selectedEmoji: string | null = null;
+  let selectedEmoji: string | null = prefs.emoji || null;
+  const preview = container.querySelector<HTMLElement>('#landing-emoji-preview');
 
   const updateGo = (): void => {
     goBtn.disabled = !(nameInput.value.trim().length > 0 && selectedEmoji !== null);
   };
 
+  const syncPreview = (): void => {
+    if (preview) preview.textContent = selectedEmoji ?? '❔';
+  };
+
   for (const e of EMOJIS) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'strip-emoji';
+    b.className = 'strip-emoji' + (e === selectedEmoji ? ' active' : '');
     b.textContent = e;
     b.title = e;
     b.addEventListener('click', () => {
       selectedEmoji = e;
       strip.querySelectorAll('.strip-emoji').forEach((x) => x.classList.toggle('active', x === b));
+      syncPreview();
       updateGo();
     });
     strip.append(b);
@@ -85,5 +94,6 @@ export function renderLanding(container: HTMLElement): void {
     location.hash = '#/user';
   });
 
+  syncPreview();
   updateGo();
 }

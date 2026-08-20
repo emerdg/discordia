@@ -1,8 +1,21 @@
-import { watchAnswer, watchIce, watchOffer, sendOffer, sendAnswer, sendIce, clearSignal } from '../lib/signaling';
+import {
+  watchAnswer,
+  watchIce,
+  watchOffer,
+  sendOffer,
+  sendAnswer,
+  sendIce,
+  clearSignal,
+  connMatches,
+  type SignalOfferPayload,
+  type ConnId,
+} from '../lib/signaling';
 import { joinPresence, leavePresence, setSharing, watchMembers } from '../lib/presence';
+import { ensureAuthed } from '../lib/firebase';
 import { decodeWire, encodeWire, type Wire } from '../lib/protocol';
 import { withTimeout } from '../util/dom';
 import { encodingsFor, iceConfig, preferredVideoCodecs } from './media';
+import { engineFlags, newConnId, stripIceCandidate, DISCONNECT_GRACE_MS, type CleanIceInit } from './compat';
 import type { ChatMessage, CodecPref, MemberInfo, Resolution } from '../types';
 
 export interface MeshEvents {
@@ -23,28 +36,19 @@ interface PeerLink {
   retryTimer: number | null;
 }
 
-function candidateInit(c: RTCIceCandidate): RTCIceCandidateInit {
-  return {
-    candidate: c.candidate,
-    sdpMid: c.sdpMid ?? undefined,
-    sdpMLineIndex: c.sdpMLineIndex ?? undefined,
-    usernameFragment: c.usernameFragment ?? undefined,
-  };
-}
-
 /**
  * Buffer de candidatos ICE. Candidatos em trickle podem chegar antes do
  * setRemoteDescription; adicioná-los cedo descarta a conexão. Espera o
  * remote description ser aplicado e então descarrega a fila.
  */
 interface IceBuffer {
-  queue: RTCIceCandidateInit[];
+  queue: CleanIceInit[];
   flushed: boolean;
 }
 
 const newIceBuffer = (): IceBuffer => ({ queue: [], flushed: false });
 
-function addIceBuffered(pc: RTCPeerConnection, cand: RTCIceCandidateInit, buf: IceBuffer): void {
+function addIceBuffered(pc: RTCPeerConnection, cand: CleanIceInit, buf: IceBuffer): void {
   const ready = pc.remoteDescription !== null;
   if (!ready) {
     buf.queue.push(cand);
@@ -86,6 +90,10 @@ export class Mesh {
   private readonly links = new Map<string, PeerLink>();
   private readonly mediaOut = new Map<string, RTCPeerConnection>();
   private readonly mediaIn = new Map<string, RTCPeerConnection>();
+  private readonly mediaOutUnsubs = new Map<string, () => void>();
+  private readonly mediaInUnsubs = new Map<string, () => void>();
+  private readonly mediaInConn = new Map<string, string>();
+  private readonly disconnectTimers = new Map<string, number>();
   private readonly unsubs: Array<() => void> = [];
 
   private members = new Map<string, MemberInfo>();
@@ -97,6 +105,10 @@ export class Mesh {
   private msgSeq = 0;
   private infoRequested = false;
   private stopped = false;
+  /** uid do auth anônimo (usado no escrever sinalização/presença como dono). */
+  private owner = '';
+  /** Evita loop de reconexão imposto por um par malicioso via refresh-media. */
+  private readonly refreshCooldown = new Map<string, number>();
 
   constructor(
     roomId: string,
@@ -182,7 +194,9 @@ export class Mesh {
   async join(): Promise<void> {
     this.stopped = false;
     try {
-      await withTimeout(joinPresence(this.roomId, { ...this.me, peerId: this.myId }), 6000, undefined);
+      const owner = await ensureAuthed();
+      this.owner = owner;
+      await withTimeout(joinPresence(this.roomId, { ...this.me, peerId: this.myId, owner }), 6000, undefined);
     } catch (err) {
       console.error('[mesh] falha ao registrar presença:', err);
     }
@@ -212,6 +226,17 @@ export class Mesh {
     await setSharing(this.roomId, this.myId, on);
   }
 
+  /**
+   * A sinalização carrega o `owner` (uid) de quem a escreveu. Aceita apenas
+   * se o remetente corresponde ao membro registrado com o mesmo owner.
+   * Payloads de clientes antigos (sem owner) são aceitos por retrocompatibilidade.
+   */
+  private okSignal(peerId: string, owner: string | undefined): boolean {
+    if (!owner) return true;
+    const m = this.members.get(peerId);
+    return Boolean(m && m.owner === owner);
+  }
+
   // ------------------------------------------------------------- data links
 
   private ensureLink(peerId: string): void {
@@ -238,29 +263,40 @@ export class Mesh {
     link.dc = dc;
     this.wireDataChannel(link);
 
+    const connId: ConnId = newConnId();
     const iceBuf = newIceBuffer();
     link.cleanups.push(
-      watchAnswer(this.roomId, peerId, me, 'data', async (ans) => {
-        if (pc.signalingState !== 'stable') {
-          try {
-            await pc.setRemoteDescription(ans);
-            await flushIce(pc, iceBuf);
-          } catch {
-            /* oferecimento recusado */
-          }
+      watchAnswer(this.roomId, peerId, me, 'data', (ans) => {
+        if (!this.okSignal(peerId, ans.owner)) return;
+        if (!connMatches(connId, ans.connId)) return;
+        const desc = ans.description;
+        if (pc.remoteDescription === null && pc.signalingState === 'have-local-offer') {
+          void pc
+            .setRemoteDescription(desc)
+            .then(() => flushIce(pc, iceBuf))
+            .catch(() => {
+              /* oferecimento recusado */
+            });
         }
       }),
-      watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
+      watchIce(this.roomId, peerId, me, 'data', (ice) => {
+        if (!this.okSignal(peerId, ice.owner)) return;
+        if (!connMatches(connId, ice.connId)) return;
+        const clean = stripIceCandidate(ice.candidate);
+        if (clean) addIceBuffered(pc, clean, iceBuf);
+      }),
     );
 
-    pc.onicecandidate = (e) => {
-      if (e.candidate) void sendIce(this.roomId, me, peerId, 'data', candidateInit(e.candidate));
+pc.onicecandidate = (e) => {
+      if (!e.candidate) return;
+      const clean = stripIceCandidate(e.candidate);
+      if (clean) void sendIce(this.roomId, this.myId, peerId, 'media', clean, this.owner, connId);
     };
     this.wirePcEvents(pc, () => this.handleLinkClosed(link));
     void (async () => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await sendOffer(this.roomId, me, peerId, offer, 'data');
+      await sendOffer(this.roomId, me, peerId, offer, 'data', this.owner, { connId });
     })().catch(() => this.handleLinkClosed(link));
   }
 
@@ -277,8 +313,10 @@ export class Mesh {
     this.links.set(peerId, link);
 
     link.cleanups.push(
-      watchOffer(this.roomId, peerId, me, 'data', async (offer) => {
+      watchOffer(this.roomId, peerId, me, 'data', async (payload) => {
+        if (!this.okSignal(peerId, payload.owner)) return;
         if (!this.links.has(peerId) || this.stopped || link.dataPc) return;
+        const connId: ConnId = payload.connId ?? '';
         const pc = new RTCPeerConnection(iceConfig());
         link.dataPc = pc;
         const iceBuf = newIceBuffer();
@@ -287,18 +325,25 @@ export class Mesh {
           this.wireDataChannel(link);
         };
         link.cleanups.push(
-watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
+          watchIce(this.roomId, peerId, me, 'data', (ice) => {
+            if (!this.okSignal(peerId, ice.owner)) return;
+            if (!connMatches(connId, ice.connId)) return;
+            const clean = stripIceCandidate(ice.candidate);
+            if (clean) addIceBuffered(pc, clean, iceBuf);
+          }),
         );
         pc.onicecandidate = (e) => {
-          if (e.candidate) void sendIce(this.roomId, me, peerId, 'data', candidateInit(e.candidate));
+          if (!e.candidate) return;
+          const clean = stripIceCandidate(e.candidate);
+          if (clean) void sendIce(this.roomId, me, peerId, 'data', clean, this.owner, connId);
         };
         this.wirePcEvents(pc, () => this.handleLinkClosed(link));
         try {
-          await pc.setRemoteDescription(offer);
+          await pc.setRemoteDescription(payload.description);
           await flushIce(pc, iceBuf);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          await sendAnswer(this.roomId, me, peerId, answer, 'data');
+          await sendAnswer(this.roomId, me, peerId, answer, 'data', this.owner, connId);
         } catch {
           this.handleLinkClosed(link);
         }
@@ -337,9 +382,35 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     return '';
   }
 
+  // -------------------------------------------------------- tolerância de rede
+
+  /** Estado `disconnected` é transitório (principalmente Gecko/WebKit). */
+  private armDisconnectGrace(peerId: string, teardown: () => void): void {
+    this.clearDisconnectGrace(peerId);
+    const t = window.setTimeout(() => {
+      this.disconnectTimers.delete(peerId);
+      teardown();
+    }, DISCONNECT_GRACE_MS);
+    this.disconnectTimers.set(peerId, t);
+  }
+
+  private clearDisconnectGrace(peerId: string): void {
+    const t = this.disconnectTimers.get(peerId);
+    if (t != null) {
+      clearTimeout(t);
+      this.disconnectTimers.delete(peerId);
+    }
+  }
+
+  private clearAllDisconnectTimers(): void {
+    for (const t of this.disconnectTimers.values()) clearTimeout(t);
+    this.disconnectTimers.clear();
+  }
+
   private wireDataChannel(link: PeerLink): void {
     const dc = link.dc;
     if (!dc) return;
+    dc.binaryType = 'arraybuffer';
     dc.onmessage = (e) => {
       const wire = decodeWire(e.data);
       if (wire) this.handleWire(link.peerId, wire);
@@ -392,9 +463,17 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
 
   private handleWire(fromId: string, wire: Wire): void {
     switch (wire.type) {
-      case 'chat':
+      case 'chat': {
+        // O remetente do canal de dados deve ser o autor da mensagem. Nome/
+        // emoji/cor são derivados do membro conhecido no roster (sem spoof).
+        if (!wire.message || wire.message.from !== fromId) break;
+        const member = this.members.get(fromId);
+        if (member) {
+          wire.message = { ...wire.message, name: member.name, emoji: member.emoji, color: member.color };
+        }
         this.events.onChat(wire.message);
         break;
+      }
       case 'room-info-req': {
         const target = this.links.get(fromId)?.dc;
         if (target) {
@@ -407,14 +486,20 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
         break;
       }
       case 'room-info-res':
+        // Só aceita o nome da sala de quem é membro do roster.
+        if (!this.members.has(fromId)) break;
         this.roomName = wire.name;
         this.events.onRoomInfo({ name: wire.name });
         break;
       case 'unwatch':
         this.unwatchMe(fromId);
         break;
-      case 'refresh-media':
+      case 'refresh-media': {
         // O transmissor reaplicou configurações: espectadores reconectam.
+        // Throttle mínimo de 2s por par evita loop de reconexão forçada.
+        const last = this.refreshCooldown.get(fromId);
+        if (last !== undefined && Date.now() - last < 2000) break;
+        this.refreshCooldown.set(fromId, Date.now());
         if (this.mediaOut.has(fromId)) {
           this.unwatch(fromId);
           window.setTimeout(() => {
@@ -424,6 +509,7 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
           }, 400);
         }
         break;
+      }
       default:
         break;
     }
@@ -467,8 +553,14 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
   }
 
   private unwatchMe(fromId: string): void {
+    this.clearDisconnectGrace(fromId);
     const pc = this.mediaIn.get(fromId);
     if (pc) {
+      const unsub = this.mediaInUnsubs.get(fromId);
+      if (unsub) {
+        unsub();
+        this.mediaInUnsubs.delete(fromId);
+      }
       try {
         pc.close();
       } catch {
@@ -477,60 +569,102 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     }
     void clearSignal(this.roomId, fromId, this.myId);
     this.mediaIn.delete(fromId);
+    this.mediaInConn.delete(fromId);
     this.events.onRemoteWatch(fromId, false);
   }
 
   // ------------------------------------------------------------- mídia (assistir)
 
-  async watch(peerId: string): Promise<boolean> {
+  async watch(peerId: string, opts?: { wantedRes?: Resolution }): Promise<boolean> {
     if (this.stopped || peerId === this.myId) return false;
     if (this.mediaOut.has(peerId)) return true;
 
     const member = this.members.get(peerId);
     if (!member?.sharing) return false;
 
+    const connId: ConnId = newConnId();
     const pc = new RTCPeerConnection(iceConfig());
     this.mediaOut.set(peerId, pc);
-    this.events.onReceiveEnd(peerId);
 
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
+    const flags = engineFlags();
+    if (flags.hasSetCodecPreferences && flags.engine === 'blink') {
+      // Preferência de codec aplicada no OFERECEDOR (Chrome): a lista fica no
+      // offer e o respondedor só a reflete. No respondedor (Firefox), o
+      // setCodecPreferences gerava um SDP de answer que o Chrome recusava
+      // parsear ("Failed to parse codecs correctly").
+      try {
+        const pref = preferredVideoCodecs(this.codecPref);
+        if (pref.length) {
+          for (const tr of pc.getTransceivers()) {
+            if (tr.receiver?.track?.kind === 'video') {
+              tr.setCodecPreferences(pref);
+            }
+          }
+        }
+      } catch {
+        /* navegador sem suporte — usa a ordem padrão */
+      }
+    }
     pc.ontrack = (e) => {
-      const stream = e.streams[0];
-      if (stream) this.events.onReceiveStream(peerId, stream);
+      const stream = e.streams[0] ?? new MediaStream([e.track]);
+      this.events.onReceiveStream(peerId, stream);
     };
     pc.onicecandidate = (e) => {
-      if (e.candidate) void sendIce(this.roomId, this.myId, peerId, 'media', candidateInit(e.candidate));
+      if (!e.candidate) return;
+      const clean = stripIceCandidate(e.candidate);
+      if (clean) void sendIce(this.roomId, this.myId, peerId, 'media', clean, connId);
     };
     pc.onconnectionstatechange = () => {
       console.debug(`[mesh] mediaOut ${peerId} → ${pc.connectionState}`);
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.teardownWatch(peerId);
+      const s = pc.connectionState;
+      if (s === 'failed' || s === 'closed') this.handleMediaOutClosed(peerId);
+      else if (s === 'disconnected') this.armDisconnectGrace(peerId, () => this.handleMediaOutClosed(peerId));
+      else if (s === 'connected') this.clearDisconnectGrace(peerId);
     };
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') this.teardownWatch(peerId);
+      const s = pc.iceConnectionState;
+      if (s === 'failed' || s === 'closed') this.handleMediaOutClosed(peerId);
+      else if (s === 'disconnected') this.armDisconnectGrace(peerId, () => this.handleMediaOutClosed(peerId));
+      else if (s === 'connected' || s === 'completed') this.clearDisconnectGrace(peerId);
     };
 
     const iceBuf = newIceBuffer();
-    const unsubAnswer = watchAnswer(this.roomId, peerId, this.myId, 'media', async (ans) => {
-      if (pc.signalingState !== 'stable') {
-        try {
-          await pc.setRemoteDescription(ans);
-          await flushIce(pc, iceBuf);
-        } catch {
-          /* noop */
-        }
+    const unsubAnswer = watchAnswer(this.roomId, peerId, this.myId, 'media', (ans) => {
+      if (!this.okSignal(peerId, ans.owner)) return;
+      console.debug(
+        `[mesh] answer recebido de ${peerId}: connId esperado=${connId} recebido=${ans.connId ?? '(vazio)'} state=${pc.signalingState}`,
+      );
+      if (!connMatches(connId, ans.connId)) return;
+      const desc = ans.description;
+      if (pc.remoteDescription === null && pc.signalingState === 'have-local-offer') {
+        void pc
+          .setRemoteDescription(desc)
+          .then(() => flushIce(pc, iceBuf))
+          .catch((err) => console.debug(`[mesh] setRemoteDescription(media answer) falhou:`, err));
       }
     });
-    const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (c) => addIceBuffered(pc, c, iceBuf));
+    const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (ice) => {
+      if (!this.okSignal(peerId, ice.owner)) return;
+      if (!connMatches(connId, ice.connId)) return;
+      const clean = stripIceCandidate(ice.candidate);
+      if (clean) addIceBuffered(pc, clean, iceBuf);
+    });
+    this.mediaOutUnsubs.set(peerId, () => {
+      unsubAnswer();
+      unsubIce();
+    });
 
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await sendOffer(this.roomId, this.myId, peerId, offer, 'media');
+      await sendOffer(this.roomId, this.myId, peerId, offer, 'media', this.owner, {
+        ...(opts?.wantedRes ? { wantedRes: opts.wantedRes } : {}),
+        connId,
+      });
       console.debug(`[mesh] assistindo ${peerId} — offer enviado`);
     } catch {
-      unsubAnswer();
-      unsubIce();
       this.teardownWatch(peerId);
       return false;
     }
@@ -539,12 +673,7 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
 
   unwatch(peerId: string): void {
     if (!this.mediaOut.has(peerId)) return;
-    const pc = this.mediaOut.get(peerId);
-    try {
-      pc?.close();
-    } catch {
-      /* noop */
-    }
+    this.clearDisconnectGrace(peerId);
     this.teardownWatch(peerId);
     const dc = this.links.get(peerId)?.dc;
     if (dc && dc.readyState === 'open') {
@@ -556,10 +685,22 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     }
   }
 
+  private handleMediaOutClosed(peerId: string): void {
+    this.clearDisconnectGrace(peerId);
+    if (!this.mediaOut.has(peerId)) return;
+    this.teardownWatch(peerId);
+  }
+
   private teardownWatch(peerId: string): void {
+    this.clearDisconnectGrace(peerId);
     const pc = this.mediaOut.get(peerId);
     if (pc) {
       void clearSignal(this.roomId, this.myId, peerId);
+      const unsubs = this.mediaOutUnsubs.get(peerId);
+      if (unsubs) {
+        unsubs();
+        this.mediaOutUnsubs.delete(peerId);
+      }
       try {
         pc.close();
       } catch {
@@ -575,14 +716,25 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
   /** Observa offers de mídia vindos de um par que quer me assistir. */
   watchIncomingMedia(peerId: string): void {
     const me = this.myId;
-    const off = watchOffer(this.roomId, peerId, me, 'media', async (offer) => {
-      if (this.stopped || this.mediaIn.has(peerId)) return;
-      await this.answerMediaOffer(peerId, offer);
+    const off = watchOffer(this.roomId, peerId, me, 'media', async (payload) => {
+      if (this.stopped) return;
+      const incoming = payload.connId ?? '';
+      if (this.mediaIn.has(peerId)) {
+        if (this.mediaInConn.get(peerId) === incoming) return;
+        // Offer novo (connId distinto): substitui uma conexão antiga/órfã que
+        // ficou ocupando o slot (ex.: re-clique no mesmo usuário). Sem isso,
+        // o novo offer era ignorado para sempre e o tile ficava "conectando".
+        this.handleMediaInClosed(peerId);
+      }
+      await this.answerMediaOffer(peerId, payload);
     });
     this.unsubs.push(off);
   }
 
-  private async answerMediaOffer(peerId: string, offer: RTCSessionDescriptionInit): Promise<void> {
+  private async answerMediaOffer(peerId: string, payload: SignalOfferPayload): Promise<void> {
+    if (!this.okSignal(peerId, payload.owner)) return;
+    const connId: ConnId = payload.connId ?? '';
+    this.mediaInConn.set(peerId, connId);
     const pc = new RTCPeerConnection(iceConfig());
     this.mediaIn.set(peerId, pc);
 
@@ -594,46 +746,44 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     }
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) void sendIce(this.roomId, this.myId, peerId, 'media', candidateInit(e.candidate));
+      if (!e.candidate) return;
+      const clean = stripIceCandidate(e.candidate);
+      if (clean) void sendIce(this.roomId, this.myId, peerId, 'media', clean, this.owner, connId);
     };
     const iceBuf = newIceBuffer();
-    const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (c) => addIceBuffered(pc, c, iceBuf));
+    const unsubIce = watchIce(this.roomId, peerId, this.myId, 'media', (ice) => {
+      if (!this.okSignal(peerId, ice.owner)) return;
+      if (!connMatches(connId, ice.connId)) return;
+      const clean = stripIceCandidate(ice.candidate);
+      if (clean) addIceBuffered(pc, clean, iceBuf);
+    });
+    this.mediaInUnsubs.set(peerId, unsubIce);
 
     pc.onconnectionstatechange = () => {
       console.debug(`[mesh] mediaIn ${peerId} → ${pc.connectionState}`);
-      if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
-        unsubIce();
-        try {
-          pc.close();
-        } catch {
-          /* noop */
-        }
-        this.mediaIn.delete(peerId);
-        this.events.onRemoteWatch(peerId, false);
-      }
+      const s = pc.connectionState;
+      if (s === 'failed' || s === 'closed') this.handleMediaInClosed(peerId);
+      else if (s === 'disconnected') this.armDisconnectGrace(peerId, () => this.handleMediaInClosed(peerId));
+      else if (s === 'connected') this.clearDisconnectGrace(peerId);
     };
 
     try {
-      await pc.setRemoteDescription(offer);
+      await pc.setRemoteDescription(payload.description);
       await flushIce(pc, iceBuf);
-      const pref = preferredVideoCodecs(this.codecPref);
       for (const tr of pc.getTransceivers()) {
         if (!tr.sender?.track) continue;
         tr.direction = 'sendonly';
-        if (tr.sender.track.kind === 'video') {
-          try {
-            tr.setCodecPreferences(pref);
-          } catch {
-            /* navegador sem suporte — usa a ordem padrão */
-          }
-        }
+        // NOTA: sem setCodecPreferences aqui — o SDP de answer resultante
+        // (Firefox) era recusado pelo Chrome no setRemoteDescription
+        // ("Failed to parse codecs correctly"). A preferência de codec agora
+        // é aplicada no offer (oferecedor) quando o navegador é Chrome.
       }
       for (const sender of pc.getSenders()) {
         if (sender.track?.kind === 'video') {
-          const res = this.resolution as Resolution;
+          const effective = (payload.wantedRes ?? this.resolution) as Resolution;
           try {
             const params = sender.getParameters();
-            params.encodings = encodingsFor(sender.track, res);
+            params.encodings = encodingsFor(sender.track, effective);
             await sender.setParameters(params);
           } catch {
             /* parâmetros não suportados neste navegador */
@@ -642,17 +792,30 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
       }
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await sendAnswer(this.roomId, this.myId, peerId, answer, 'media');
+      await sendAnswer(this.roomId, this.myId, peerId, answer, 'media', this.owner, connId);
       this.events.onRemoteWatch(peerId, true);
     } catch {
-      try {
-        pc.close();
-      } catch {
-        /* noop */
-      }
-      unsubIce();
-      this.mediaIn.delete(peerId);
+      this.handleMediaInClosed(peerId);
     }
+  }
+
+  private handleMediaInClosed(peerId: string): void {
+    this.clearDisconnectGrace(peerId);
+    const pc = this.mediaIn.get(peerId);
+    if (!pc) return;
+    const unsub = this.mediaInUnsubs.get(peerId);
+    if (unsub) {
+      unsub();
+      this.mediaInUnsubs.delete(peerId);
+    }
+    try {
+      pc.close();
+    } catch {
+      /* noop */
+    }
+    this.mediaIn.delete(peerId);
+    this.mediaInConn.delete(peerId);
+    this.events.onRemoteWatch(peerId, false);
   }
 
   // ----------------------------------------------------------------- leave
@@ -660,6 +823,7 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
   async destroy(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.clearAllDisconnectTimers();
 
     for (const link of [...this.links.values()]) {
       this.closeLink(link);
@@ -668,6 +832,11 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     this.links.clear();
 
     for (const [peerId, pc] of [...this.mediaOut]) {
+      const unsubs = this.mediaOutUnsubs.get(peerId);
+      if (unsubs) {
+        unsubs();
+        this.mediaOutUnsubs.delete(peerId);
+      }
       try {
         pc.close();
       } catch {
@@ -678,9 +847,15 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
     this.mediaOut.clear();
 
     for (const peerId of [...this.mediaIn.keys()]) {
+      const unsub = this.mediaInUnsubs.get(peerId);
+      if (unsub) {
+        unsub();
+        this.mediaInUnsubs.delete(peerId);
+      }
       void clearSignal(this.roomId, peerId, this.myId);
     }
     this.mediaIn.clear();
+    this.mediaInConn.clear();
 
     this.unsubs.splice(0).forEach((fn) => fn());
     await leavePresence(this.roomId, this.myId);
@@ -689,6 +864,12 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
   /** Encerra todas as conexões de entrada (não assisto mais ninguém vê). */
   closeIncoming(): void {
     for (const [peerId, pc] of [...this.mediaIn]) {
+      this.clearDisconnectGrace(peerId);
+      const unsub = this.mediaInUnsubs.get(peerId);
+      if (unsub) {
+        unsub();
+        this.mediaInUnsubs.delete(peerId);
+      }
       void clearSignal(this.roomId, peerId, this.myId);
       try {
         pc.close();
@@ -696,11 +877,13 @@ watchIce(this.roomId, peerId, me, 'data', (c) => addIceBuffered(pc, c, iceBuf)),
         /* noop */
       }
       this.mediaIn.delete(peerId);
+      this.mediaInConn.delete(peerId);
       this.events.onRemoteWatch(peerId, false);
     }
   }
 
   private teardownPeer(peerId: string): void {
+    this.clearDisconnectGrace(peerId);
     const link = this.links.get(peerId);
     if (link) this.closeLink(link);
     this.teardownWatch(peerId);

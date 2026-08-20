@@ -24,6 +24,7 @@ export interface UserPrefs {
   theme: Theme;
   codec: CodecPref;
   filterOffensive: boolean;
+  autoDownscale: boolean;
 }
 
 export interface RecentRoom {
@@ -47,6 +48,8 @@ export interface MemberInfo {
   color: string;
   sharing: boolean;
   joinedAt: number;
+  /** uid do auth anônimo que criou o registro (garante a propriedade do nó). */
+  owner?: string;
 }
 
 export interface ChatMessage {

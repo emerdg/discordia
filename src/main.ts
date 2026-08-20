@@ -8,6 +8,8 @@ import { initTheme } from './lib/theme';
 
 initTheme();
 
+console.log(`[discordia] build-live: fix-media-b3`);
+
 const app = document.getElementById('app');
 if (!app) throw new Error('#app não encontrado');
 const root = app;

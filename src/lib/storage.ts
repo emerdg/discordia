@@ -187,6 +187,7 @@ const DEFAULT_PREFS: UserPrefs = {
   theme: 'dark',
   codec: 'vp8',
   filterOffensive: true,
+  autoDownscale: true,
 };
 
 export function getPrefs(): UserPrefs {
