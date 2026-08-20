@@ -874,6 +874,14 @@ select {
   margin-top: 8px;
 }
 
+.settings-foot {
+  margin: 2px 0 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3, var(--text-2));
+  opacity: 0.75;
+}
+
 .setting {
   display: flex;
   flex-direction: column;
@@ -1543,8 +1551,12 @@ select {
 
 .switch input {
   appearance: none;
+  -webkit-appearance: none;
   width: 34px;
   height: 19px;
+  margin: 0;
+  flex: none;
+  box-sizing: border-box;
   border-radius: 999px;
   background: var(--bg-3);
   border: 1px solid var(--border);
@@ -1564,7 +1576,7 @@ select {
   height: 13px;
   border-radius: 50%;
   background: var(--text-2);
-  transition: transform 0.16s ease, background 0.16s ease;
+  transition: left 0.16s ease, background 0.16s ease;
 }
 
 .switch input:checked {
@@ -1573,7 +1585,7 @@ select {
 }
 
 .switch input:checked::after {
-  transform: translateX(15px);
+  left: 17px;
   background: #fff;
 }
 

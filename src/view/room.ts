@@ -1,5 +1,5 @@
 import { firebaseReady, ensureAuthed } from '../lib/firebase';
-import { isValidRoomId } from '../lib/config';
+import { isValidRoomId, APP_VERSION } from '../lib/config';
 import { countMembers, readRoomMeta, watchHubConnection, watchRoomMeta } from '../lib/presence';
 import { addRoom, getPrefs, getRoomHistory, patchPrefs } from '../lib/storage';
 import { appendMessages, loadBefore, loadRecent, nextSeq } from '../lib/idb';
@@ -772,6 +772,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     const codecLabel = prefs.codec === 'h264' ? 'H.264 (hardware)' : 'VP8 (universal)';
     const lines = [
       `Hub: ${hubOnline ? 'online ✅' : 'offline ⛔'}`,
+      `Versão: ${APP_VERSION}`,
       `Sala: ${roomId}   |   Seu peer: ${s.peerId}`,
       `Participantes no banco: ${s.members} → ${names}`,
       `Canais de dados abertos: ${s.links}/${s.linksTotal}`,

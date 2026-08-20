@@ -1,3 +1,7 @@
+import pkg from '../../package.json';
+
+export const APP_VERSION = pkg.version || '0.0.0';
+
 export const CONFIG = {
   appName: 'Discórdia',
   githubUrl: import.meta.env.VITE_GITHUB_URL || 'https://github.com/emerdg/discordia',

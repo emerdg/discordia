@@ -1,4 +1,5 @@
 import { ensureAuthed, firebaseMissing, firebaseReady } from '../lib/firebase';
+import { APP_VERSION } from '../lib/config';
 import { isValidRoomId, normalizeRoomId, randomId } from '../lib/config';
 import { countMembers, readRoomMeta, writeRoomMeta } from '../lib/presence';
 import {
@@ -119,19 +120,21 @@ export function renderUser(container: HTMLElement): void {
                   <span class="setting-label">Banda (múltiplas telas)</span>
                   <label class="switch" for="auto-downscale">
                     <input type="checkbox" id="auto-downscale" ${prefs.autoDownscale ? 'checked' : ''}>
-                    A partir da 3ª tela, usar até 720p nas ativas
+                    <span>Usar até 720p a partir da 3ª tela</span>
                   </label>
                   <p class="hint">Reduz o gasto de banda ao assistir 3 ou mais telas ao mesmo tempo. Desative para manter 1080p em todas.</p>
                 </div>
                 <div class="setting">
-                  <span class="setting-label">Filtro de linguagem</span>
+                  <span class="setting-label">Filtro de linguagem Inadequada</span>
                   <label class="switch" for="filter-offensive">
                     <input type="checkbox" id="filter-offensive" ${prefs.filterOffensive ? 'checked' : ''}>
-                    Censurar ofensas e racismo
+                    <span>Censurar ofensas e racismo</span>
                   </label>
                   <p class="hint">Aplica no envio e na exibição das mensagens.</p>
                 </div>
               </div>
+              <p class="settings-foot">Discórdia v${APP_VERSION}</p>
+            </div>
             </div>
           </div>
         </section>
