@@ -6,7 +6,7 @@
     "rooms": {
       "$roomId": {
         ".read": "auth != null",
-        ".write": false,
+        ".write": "auth != null && !newData.exists() && data.child('meta').child('hostId').val() === auth.uid",
 
         "members": {
           "$peerId": {

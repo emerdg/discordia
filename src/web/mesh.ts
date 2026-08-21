@@ -29,6 +29,7 @@ export interface MeshEvents {
   onTxApproved(): void;
   onTxDenied(): void;
   onTxCancelled(): void;
+  onMessageDeleted(messageId: string): void;
 }
 
 interface PeerLink {
@@ -294,6 +295,11 @@ export class Mesh {
   /** Criador/moderador encerra a transmissão ativa de um membro. */
   cancelTransmit(peerId: string): void {
     this.sendTo(peerId, { type: 'tx-cancel', owner: this.owner });
+  }
+
+  /** Solicita a deleção de uma mensagem por moderador/criador (P2P broadcast). */
+  deleteMessage(messageId: string): void {
+    this.broadcast({ type: 'tx-delete-message', messageId, owner: this.owner });
   }
 
   /**
@@ -595,6 +601,11 @@ pc.onicecandidate = (e) => {
       }
       case 'tx-cancel': {
         if (this.okTx(fromId, wire.owner, true)) this.events.onTxCancelled();
+        break;
+      }
+      case 'tx-delete-message': {
+        // Apenas criador/moderador pode solicitar deleção de mensagens.
+        if (this.okTx(fromId, wire.owner, true)) this.events.onMessageDeleted(wire.messageId);
         break;
       }
       default:

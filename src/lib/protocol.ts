@@ -13,7 +13,8 @@ export type Wire =
   | { type: 'tx-request'; owner: string }
   | { type: 'tx-approve'; owner: string }
   | { type: 'tx-deny'; owner: string }
-  | { type: 'tx-cancel'; owner: string };
+  | { type: 'tx-cancel'; owner: string }
+  | { type: 'tx-delete-message'; messageId: string; owner: string };
 
 export function encodeWire(msg: Wire): string {
   return JSON.stringify(msg);

@@ -1241,6 +1241,11 @@ select {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
+  transition:
+    width 0.28s ease,
+    opacity 0.2s ease,
+    border-color 0.28s ease;
 }
 
 .rr-chat[data-side="right"] {
@@ -1932,4 +1937,34 @@ select {
 
 .room-create-setting {
   margin-top: 14px;
+}
+
+/* --- chat lateral recolhível --- */
+
+#chat-panel.collapsed {
+  width: 0;
+  min-width: 0;
+  flex-basis: 0;
+  border-right-color: transparent;
+  border-left-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#chat-panel.collapsed .chat-title,
+#chat-panel.collapsed .chat-messages,
+#chat-panel.collapsed .chat-form,
+#chat-panel.collapsed .chat-more,
+#chat-panel.collapsed .self-preview {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .rr:not(.fs) #chat-panel.collapsed {
+    transform: translateX(-102%);
+  }
+
+  .rr:not(.fs) #chat-panel.collapsed[data-side='right'] {
+    transform: translateX(102%);
+  }
 }

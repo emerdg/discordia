@@ -13,6 +13,7 @@ import {
   removeRoom,
 } from '../lib/storage';
 import { searchEmojis } from '../lib/emojiNames';
+import { hasOffensive } from '../lib/words';
 import { icon } from '../icons';
 import { escapeHtml, input$, toast } from '../util/dom';
 import { setTheme, THEMES } from '../lib/theme';
@@ -59,7 +60,20 @@ export function renderUser(container: HTMLElement): void {
                 <button data-pol="everyone" class="seg-btn">Todos</button>
                 <button data-pol="creator_only" class="seg-btn">Só o criador</button>
                 <button data-pol="creator_approves" class="seg-btn">Criador aprova</button>
+                <button data-pol="moderators_approves" class="seg-btn">Moderadores aprovam</button>
               </div>
+            </div>
+            <div class="setting room-create-setting">
+              <span class="setting-label">Delay de envio de mensagens (segundos)</span>
+              <select id="room-chat-delay">
+                <option value="1">1s</option>
+                <option value="5">5s</option>
+                <option value="10">10s</option>
+                <option value="30">30s</option>
+                <option value="60">60s</option>
+                <option value="90">90s</option>
+              </select>
+              <p class="hint">Mínimo 1s para evitar sobrecarga P2P e spam.</p>
             </div>
             <button id="btn-create" class="btn-primary">${icon('plus', 16)} Criar sala</button>
             <p class="hint">O ID é gerado automaticamente. Você o compartilha com os amigos.</p>
@@ -202,6 +216,12 @@ export function renderUser(container: HTMLElement): void {
           toast('Nome muito longo (máximo 40 caracteres).');
           return;
         }
+        // Bloqueia nomes de sala com termos ofensivos, independente do filtro por usuário.
+        if (hasOffensive(name)) {
+          toast('O nome da sala contém palavras inadequadas. Escolha outro.');
+          nameInput.focus();
+          return;
+        }
         if (!firebaseReady()) {
           toast('Firebase não configurado: ' + firebaseMissing().join(', '));
           return;
@@ -209,6 +229,7 @@ export function renderUser(container: HTMLElement): void {
         const maxUsers = Number((maxSelect as HTMLSelectElement).value || 5);
         const censorEl = container.querySelector<HTMLInputElement>('#room-censorship');
         const policyEl = container.querySelector<HTMLElement>('#room-broadcast-seg')!.querySelector<HTMLButtonElement>('.seg-btn.active');
+        const delayEl = container.querySelector<HTMLSelectElement>('#room-chat-delay');
         const id = normalizeRoomId(randomId());
         let owner: string;
         try {
@@ -225,6 +246,7 @@ export function renderUser(container: HTMLElement): void {
           censorship: censorEl?.checked ?? true,
           broadcastPolicy: (policyEl?.getAttribute('data-pol') as BroadcastPolicy) || 'everyone',
           moderators: [] as string[],
+          chatDelay: Number(delayEl?.value) || 10,
         };
         void writeRoomMeta(id, meta)
           .then(() => {
@@ -263,7 +285,11 @@ export function renderUser(container: HTMLElement): void {
           return;
         }
         const meta = await readRoomMeta(id);
-        if (meta && (await countMembers(id)) >= meta.maxUsers) {
+        if (!meta) {
+          toast('Esta ID não pertence a uma sala existente.');
+          return;
+        }
+        if ((await countMembers(id)) >= meta.maxUsers) {
           toast(`Sala cheia (máximo ${meta.maxUsers}).`);
           return;
         }

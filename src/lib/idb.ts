@@ -128,3 +128,8 @@ export async function hasMessages(roomId: string): Promise<boolean> {
     req.onerror = () => resolve(false);
   });
 }
+
+/** Remove uma mensagem pelo ID. */
+export async function deleteMessage(messageId: string): Promise<void> {
+  await withStore('readwrite', (store) => store.delete(messageId));
+}

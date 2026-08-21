@@ -2,6 +2,7 @@ import { firebaseReady, ensureAuthed, getAuthUid } from '../lib/firebase';
 import { isValidRoomId, APP_VERSION } from '../lib/config';
 import {
   countMembers,
+  deleteRoom,
   eligibleModerators,
   normalizeRoomMeta,
   readRoomMeta,
@@ -9,8 +10,8 @@ import {
   watchHubConnection,
   watchRoomMeta,
 } from '../lib/presence';
-import { addRoom, getPrefs, getRoomHistory, patchPrefs } from '../lib/storage';
-import { appendMessages, loadBefore, loadRecent, nextSeq } from '../lib/idb';
+import { addRoom, getPrefs, patchPrefs } from '../lib/storage';
+import { appendMessages, loadBefore, loadRecent, nextSeq, deleteMessage } from '../lib/idb';
 import { Mesh } from '../web/mesh';
 import { startCapture, stopStream } from '../web/media';
 import { censorText } from '../lib/words';
@@ -93,6 +94,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   const roomPolicy = (): BroadcastPolicy => roomMeta?.broadcastPolicy ?? 'everyone';
   const roomCensorship = (): boolean => roomMeta?.censorship !== false;
   const effectiveFilter = (): boolean => roomCensorship() || prefs.filterOffensive;
+  /** True se houver ao menos um moderador ou o dono presente na sala. */
   const hasApproverPresent = (): boolean =>
     members.some((m) => roomMeta && (m.owner === roomMeta.hostId || roomMeta.moderators?.includes(m.owner as string)));
 
@@ -107,9 +109,10 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
             <span class="brand-name" id="room-name">Sala</span>
             <code class="rr-id" id="room-id">${roomId.toUpperCase()}</code>
           </span>
-          <span class="rr-actions">
+<span class="rr-actions">
             <button id="btn-copy-id" class="icon-btn" title="Copiar ID da sala">${icon('copy', 17)}</button>
-            <button id="btn-room-settings" class="icon-btn" title="Configurações da sala" hidden>${icon('settings', 17)}</button>
+            <button id="btn-room-settings" class="icon-btn" title="Configurações da sala" hidden>${icon('menu', 17)}</button>
+            <button id="btn-chat-toggle" class="icon-btn" title="Mostrar/Ocultar chat">${icon('chat', 17)}</button>
             <button id="btn-fs" class="icon-btn" title="Tela cheia">${icon('fullscreen', 17)}</button>
             <button id="btn-dbg" class="icon-btn" title="Diagnóstico" hidden>${icon('diag', 17)}</button>
             <button id="btn-leave" class="danger">${icon('leave', 16)} Sair</button>
@@ -145,7 +148,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           </div>
           <div class="stage-tools">
             <div class="tools">
-              <button id="btn-chat-toggle" class="icon-btn chat-toggle-btn" title="Chat">${icon('chat', 17)}</button>
+              <button id="btn-chat-toggle-stage" class="icon-btn chat-toggle-btn" title="Chat">${icon('chat', 17)}</button>
               <button id="btn-transmit" class="btn-primary">${icon('broadcast', 17)} <span>Transmitir</span></button>
               <div id="tx-options" class="tx-panel" hidden>
                 <label class="switch" title="Microfone">
@@ -555,6 +558,21 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       : 'Iniciar transmissão';
   };
 
+  const chatToggleEls = container.querySelectorAll<HTMLElement>('#btn-chat-toggle, #btn-chat-toggle-stage');
+  const chatPanelEl = container.querySelector<HTMLElement>('#chat-panel');
+  let chatCollapsed = false;
+  const syncChatToggle = (): void => {
+    chatToggleEls.forEach((b) => {
+      b.title = chatCollapsed ? 'Exibir chat' : 'Ocultar chat';
+    });
+  };
+  const toggleChat = (): void => {
+    chatCollapsed = !chatCollapsed;
+    chatPanelEl?.classList.toggle('collapsed', chatCollapsed);
+    syncChatToggle();
+  };
+  chatToggleEls.forEach((b) => b.addEventListener('click', toggleChat));
+
   const resetAwaiting = (): void => {
     if (approvalTimer != null) {
       clearTimeout(approvalTimer);
@@ -566,10 +584,11 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     applyPolicyUi();
   };
 
-  /** Pede aprovação a um criador/moderador (política "criador aprova"). */
+  /** Pede aprovação a um criador/moderador (políticas "criador aprova" ou "moderadores aprovam"). */
   const requestApproval = (): void => {
     if (awaitingApproval || isCreator()) return;
-    if (roomPolicy() !== 'creator_approves') return;
+    const pol = roomPolicy();
+    if (!['creator_approves', 'moderators_approves'].includes(pol)) return;
     if (!hasApproverPresent()) {
       setStatus('Sem criador/moderador presente — transmissão negada.');
       toast('Ninguém autorizado na sala para aprovar a transmissão.');
@@ -616,13 +635,23 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     renderRoster(members);
   };
 
-  const startTx = async (): Promise<void> => {
+const startTx = async (): Promise<void> => {
     if (transmitting) return;
     if (roomPolicy() === 'creator_only' && !isCreator()) {
-      toast('Somente o criador pode iniciar uma transmissão nesta sala.');
+      toast('Somente o criador pode iniciar transmissão nesta sala.');
       return;
     }
     if (roomPolicy() === 'creator_approves' && !isCreator()) {
+      requestApproval();
+      return;
+    }
+    if (roomPolicy() === 'moderators_approves') {
+      if (isCreator() || isModerator()) {
+        // Criador e moderadores iniciam automaticamente
+        await beginCapture();
+        return;
+      }
+      // Usuários comuns precisam de aprovação
       requestApproval();
       return;
     }
@@ -728,6 +757,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   const buildMsg = (m: ChatMessage): HTMLElement => {
     const div = document.createElement('div');
     div.className = 'chat-msg';
+    div.dataset.msgId = m.id;
     const who = document.createElement('span');
     who.className = 'who';
     who.style.color = m.color;
@@ -736,7 +766,38 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     text.className = 'text';
     appendLinked(text, displayText(m));
     div.append(who, document.createTextNode(' : '), text);
+
+    // Botão de deletar (apenas para criador/moderador, aparece ao clicar na msg)
+    const canDelete = isCreator() || isModerator();
+    if (canDelete) {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'msg-del-btn';
+      delBtn.title = 'Excluir mensagem';
+      delBtn.innerHTML = icon('trash', 12);
+      delBtn.hidden = true;
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        mesh.deleteMessage(m.id);
+        // Remove localmente imediatamente
+        removeChatMessage(m.id);
+        // Remove do IndexedDB
+        await deleteMessage(m.id);
+      });
+      div.append(delBtn);
+
+      div.addEventListener('click', () => {
+        const btn = div.querySelector<HTMLButtonElement>('.msg-del-btn');
+        if (btn) btn.hidden = !btn.hidden;
+      });
+    }
     return div;
+  };
+
+  const removeChatMessage = (messageId: string): void => {
+    // CSS.escape evita injeção de seletor caso o id venha de um peer malicioso.
+    const msgEl = ui.chatMessages.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(messageId)}"]`);
+    if (msgEl) msgEl.remove();
   };
 
   const appendChatNode = (m: ChatMessage, prepend = false): void => {
@@ -819,7 +880,15 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     },
     onChat,
     onTxRequest: (peerId) => {
-      if (roomPolicy() !== 'creator_approves' || (!isCreator() && !isModerator())) return;
+      const pol = roomPolicy();
+      // "Criador aprova": só o criador avalia. "Moderadores aprovam": criador e moderadores.
+      const canApprove =
+        pol === 'creator_approves'
+          ? isCreator()
+          : pol === 'moderators_approves'
+            ? isCreator() || isModerator()
+            : false;
+      if (!canApprove) return;
       const m = members.find((x) => x.peerId === peerId);
       if (!m || m.peerId === mesh.peerId) return;
       pendingRequests.add(peerId);
@@ -842,6 +911,9 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       if (transmitting) {
         void stopTx().then(() => toast('Sua transmissão foi encerrada por um moderador.'));
       }
+    },
+    onMessageDeleted: (messageId) => {
+      removeChatMessage(messageId);
     },
     onRoomInfo: (info) => updateRoomName(info.name),
     onRemoteWatch: (peerId, started) => {
@@ -954,13 +1026,31 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           <button data-pol="everyone" class="seg-btn">Todos</button>
           <button data-pol="creator_only" class="seg-btn">Só o criador</button>
           <button data-pol="creator_approves" class="seg-btn">Criador aprova</button>
+          <button data-pol="moderators_approves" class="seg-btn">Moderadores aprovam</button>
         </div>
+      </div>
+      <div class="setting room-create-setting">
+        <span class="setting-label">Delay de envio de mensagens (segundos)</span>
+        <select id="set-chat-delay">
+          <option value="1">1s</option>
+          <option value="5">5s</option>
+          <option value="10">10s</option>
+          <option value="30">30s</option>
+          <option value="60">60s</option>
+          <option value="90">90s</option>
+        </select>
+        <p class="hint">Mínimo 1s para evitar sobrecarga P2P e spam.</p>
       </div>
       <div class="setting room-create-setting">
         <span class="setting-label">Moderadores</span>
         <div id="set-mods" class="mod-list"></div>
       </div>
       <p class="hint">Moderadores ajudam: aprovam transmissões quando o criador está ausente e podem encerrar transmissões.</p>
+      <div class="setting room-create-setting">
+        <span class="setting-label">Zona de perigo</span>
+        <button id="set-delete-room" class="danger" type="button">Deletar sala permanentemente</button>
+        <p class="hint">Remove a sala do banco de dados e desconecta todos os participantes.</p>
+      </div>
     `;
 
     const maxSel = body.querySelector<HTMLSelectElement>('#set-max');
@@ -1006,34 +1096,87 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
           const p = (b.getAttribute('data-pol') as BroadcastPolicy) || 'everyone';
           void updateRoomMeta(roomId, { broadcastPolicy: p }).catch(() => toast('Falha ao salvar.'));
           mark(p);
-          toast(p === 'everyone' ? 'Transmissão: todos podem' : p === 'creator_only' ? 'Transmissão: só o criador' : 'Transmissão: criador aprova');
+          const labels: Record<string, string> = {
+            everyone: 'Transmissão: todos podem',
+            creator_only: 'Transmissão: só o criador',
+            creator_approves: 'Transmissão: criador aprova',
+            moderators_approves: 'Transmissão: moderadores aprovam',
+          };
+          toast(labels[p] || 'Transmissão: política atualizada');
         });
+      });
+    }
+
+    const delaySel = body.querySelector<HTMLSelectElement>('#set-chat-delay');
+    if (delaySel) {
+      delaySel.value = String(meta.chatDelay ?? 10);
+      delaySel.addEventListener('change', () => {
+        const v = Number(delaySel.value);
+        if (v < 1 || v > 90) return;
+        void updateRoomMeta(roomId, { chatDelay: v }).catch(() => toast('Falha ao salvar.'));
+        toast(`Delay de chat: ${v}s`);
       });
     }
 
     const mods = body.querySelector<HTMLElement>('#set-mods');
     if (mods) {
       const named = [...(meta.moderators ?? [])];
-      const present = members.filter((m) => m.owner);
-      const listAdd = Array.from(new Map([...present.map((m) => [m.owner as string, m] as const), ...named.map((u) => [u, undefined] as const)]).entries());
-      listAdd.forEach(([ownerUid, m]) => {
-        const isMod = named.includes(ownerUid);
+      const hostId = meta.hostId;
+      const presentMembers = members.filter((m) => m.owner && m.owner !== hostId);
+
+      // Membros presentes (exceto criador)
+      presentMembers.forEach((m) => {
+        const isMod = named.includes(m.owner as string);
         const row = document.createElement('div');
         row.className = 'pending-row';
-        row.innerHTML = `<span class="rc-emoji">${escapeHtml(m?.emoji ?? '❔')}</span><span class="rc-name">${escapeHtml(m?.name ?? 'Membro ausente')}</span>`;
+        row.innerHTML = `<span class="rc-emoji">${escapeHtml(m.emoji)}</span><span class="rc-name">${escapeHtml(m.name)}</span>`;
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.className = 'seg-btn' + (isMod ? ' pending-ok' : '');
         toggle.textContent = isMod ? 'Remover' : 'Moderar';
-        toggle.title = isMod ? `Remover ${m?.name ?? 'membro'} dos moderadores` : `Tornar ${m?.name ?? 'membro'} moderador`;
+        toggle.title = isMod ? `Remover ${m.name} dos moderadores` : `Tornar ${m.name} moderador`;
         toggle.addEventListener('click', () => {
-          const next = isMod ? named.filter((u) => u !== ownerUid) : [...new Set([...named, ownerUid])];
+          const next = isMod ? named.filter((u) => u !== m.owner) : [...new Set([...named, m.owner as string])];
+          void updateRoomMeta(roomId, { moderators: next }).catch(() => toast('Falha ao salvar moderadores.'));
+        });
+        row.append(toggle);
+        mods.append(row);
+      });
+
+      // Moderadores nomeados que não estão presentes (apenas remover)
+      const absentMods = named.filter((uid) => !members.some((m) => m.owner === uid));
+      absentMods.forEach((uid) => {
+        const row = document.createElement('div');
+        row.className = 'pending-row';
+        row.innerHTML = `<span class="rc-emoji">❔</span><span class="rc-name">Membro ausente</span>`;
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'seg-btn pending-no';
+        toggle.textContent = 'Remover';
+        toggle.title = `Remover moderador ausente`;
+        toggle.addEventListener('click', () => {
+          const next = named.filter((u) => u !== uid);
           void updateRoomMeta(roomId, { moderators: next }).catch(() => toast('Falha ao salvar moderadores.'));
         });
         row.append(toggle);
         mods.append(row);
       });
     }
+
+    const delBtn = body.querySelector<HTMLButtonElement>('#set-delete-room');
+    delBtn?.addEventListener('click', () => {
+      if (!window.confirm('Deletar esta sala permanentemente? Todos os participantes serão desconectados.')) return;
+      delBtn.disabled = true;
+      void deleteRoom(roomId)
+        .then(() => {
+          toast('Sala deletada.');
+          location.hash = '#/user';
+        })
+        .catch(() => {
+          delBtn.disabled = false;
+          toast('Falha ao deletar a sala.');
+        });
+    });
   };
 
   settingsBtn?.addEventListener('click', () => {
@@ -1059,11 +1202,6 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
   };
 
   ui.root.querySelector('#btn-copy-id')?.addEventListener('click', copyId);
-
-  const chatPanelEl = $('chat-panel');
-  ui.root.querySelector('#btn-chat-toggle')?.addEventListener('click', () => {
-    chatPanelEl.classList.toggle('open');
-  });
 
   const fullscreenRoot = ui.root;
   const onFsChange = (): void => {
@@ -1244,9 +1382,11 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
   ui.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const SPAM_MS = 10_000;
+    // Delay exato configurado para a sala (padrão 10s, mínimo 1s).
+    const delaySec = Math.min(90, Math.max(1, roomMeta?.chatDelay ?? 10));
+    const delayMs = delaySec * 1000;
     const now = Date.now();
-    const wait = SPAM_MS - (now - lastChatAt);
+    const wait = delayMs - (now - lastChatAt);
     if (wait > 0) {
       toast(`Aguarde ${Math.ceil(wait / 1000)}s para enviar outra mensagem.`);
       armSendCooldown(wait);
@@ -1258,7 +1398,7 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
     if (!text.trim()) return;
     mesh.sendChat(text);
     lastChatAt = Date.now();
-    armSendCooldown(SPAM_MS);
+    armSendCooldown(delayMs);
     ui.chatInput.value = '';
     ui.chatInput.focus();
   });
@@ -1288,22 +1428,21 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
       const myUid = await ensureAuthed();
       uid = myUid;
       mesh.setAuthorizedModerators([]);
-      const hist = getRoomHistory(roomId);
       const meta = await withTimeout(readRoomMeta(roomId), 5000, null);
-      if (meta) {
-        const room = normalizeRoomMeta(meta);
-        if (room) {
-          roomMeta = room;
-          mesh.setRoomInfo(room.name, room.maxUsers);
-          updateRoomName(room.name);
-          mesh.setAuthorizedModerators(eligibleModerators(room));
-          applyPolicyUi();
-          applySettingsToggle();
-          renderRoster(members);
-        }
-      } else if (hist) {
-        mesh.setRoomInfo(hist.name, 10);
-        updateRoomName(hist.name);
+      if (!meta) {
+        toast('Esta ID não pertence a uma sala existente.');
+        location.hash = '#/user';
+        return;
+      }
+      const room = normalizeRoomMeta(meta);
+      if (room) {
+        roomMeta = room;
+        mesh.setRoomInfo(room.name, room.maxUsers);
+        updateRoomName(room.name);
+        mesh.setAuthorizedModerators(eligibleModerators(room));
+        applyPolicyUi();
+        applySettingsToggle();
+        renderRoster(members);
       }
 
       const count = await withTimeout(countMembers(roomId), 4000, 0);
@@ -1315,7 +1454,15 @@ export function renderRoom(container: HTMLElement, rawRoomId: string): () => Pro
 
       offMeta = watchRoomMeta(roomId, (m) => {
         const next = normalizeRoomMeta(m);
-        if (!next) return;
+        if (!next) {
+          // Sala deletada pelo criador enquanto estávamos nela.
+          if (roomMeta) {
+            roomMeta = null;
+            toast('Esta sala foi deletada pelo criador.');
+            location.hash = '#/user';
+          }
+          return;
+        }
         roomMeta = next;
         updateRoomName(next.name);
         mesh.setAuthorizedModerators(eligibleModerators(next));

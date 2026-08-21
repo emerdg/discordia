@@ -28,6 +28,7 @@ export function normalizeRoomMeta(meta: RoomMeta | null): RoomMeta | null {
     censorship: meta.censorship !== false,
     broadcastPolicy: meta.broadcastPolicy || DEFAULT_BROADCAST_POLICY,
     moderators: Array.isArray(meta.moderators) ? meta.moderators.filter((u) => typeof u === 'string') : [],
+    chatDelay: typeof meta.chatDelay === 'number' && meta.chatDelay >= 1 ? Math.min(90, meta.chatDelay) : 10,
   };
 }
 
@@ -64,6 +65,14 @@ export function watchRoomMeta(roomId: string, cb: (meta: RoomMeta | null) => voi
   const r = ref(getDb(), node.meta(roomId));
   const off = onValue(r, (snap) => cb(snap.exists() ? normalizeRoomMeta(snap.val() as RoomMeta) : null));
   return () => off();
+}
+
+/**
+ * Destrói a sala inteira no banco (meta + members + signal).
+ * As regras do RTDB permitem apenas ao criador (meta/hostId).
+ */
+export async function deleteRoom(roomId: string): Promise<void> {
+  await remove(ref(getDb(), node.room(roomId)));
 }
 
 // ----------------------------------------------------------------- members

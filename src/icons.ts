@@ -29,7 +29,8 @@ export type IconName =
   | 'x'
   | 'broadcastStop'
   | 'approve'
-  | 'deny';
+  | 'deny'
+  | 'menu';
 
 const PATHS: Record<IconName, string> = {
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/>',
@@ -63,6 +64,7 @@ const PATHS: Record<IconName, string> = {
   broadcastStop: '<circle cx="12" cy="12" r="2.5"/><rect x="6.5" y="9.5" width="11" height="5" rx="1.2"/>',
   approve: '<path d="m4 12.5 5 5L20 6.5"/>',
   deny: '<circle cx="12" cy="12" r="8"/><path d="m8 8 8 8"/>',
+  menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
 };
 
 /** Ícone em SVG string, herdando cor atual. */

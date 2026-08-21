@@ -1,6 +1,6 @@
 export type Resolution = '1080p' | '720p' | '480p';
 /** Quem pode iniciar uma transmissão na sala. */
-export type BroadcastPolicy = 'creator_only' | 'everyone' | 'creator_approves';
+export type BroadcastPolicy = 'creator_only' | 'everyone' | 'creator_approves' | 'moderators_approves';
 export type ChatSide = 'left' | 'right';
 export type ChatHistoryLimit = 0 | 25 | 50 | 100;
 export type Theme =
@@ -46,6 +46,8 @@ export interface RoomMeta {
   broadcastPolicy?: BroadcastPolicy;
   /** UIDs autorizados a aprovar/negar transmissões e cancelá-las. */
   moderators?: string[];
+  /** Intervalo mínimo entre mensagens de chat, em segundos (1–90, default 10). */
+  chatDelay?: number;
 }
 
 /** Dados de um membro da sala, publicado no andar de presença do RTDB. */
