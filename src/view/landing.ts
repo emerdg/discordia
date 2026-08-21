@@ -1,7 +1,8 @@
 import { CONFIG } from '../lib/config';
 import { EMOJIS, getPrefs, patchPrefs, setName } from '../lib/storage';
+import { hasOffensive } from '../lib/words';
 import { icon, logoMark } from '../icons';
-import { escapeHtml } from '../util/dom';
+import { escapeHtml, toast } from '../util/dom';
 
 export function renderLanding(container: HTMLElement): void {
   const prefs = getPrefs();
@@ -87,6 +88,12 @@ export function renderLanding(container: HTMLElement): void {
     if (!name || selectedEmoji === null) {
       updateGo();
       (name ? strip : nameInput).focus();
+      return;
+    }
+    // Bloqueia nomes com termos ofensivos, independente do filtro por usuário.
+    if (hasOffensive(name)) {
+      toast('Este nome contém palavras inadequadas. Escolha outro.');
+      nameInput.focus();
       return;
     }
     setName(name);
